@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import {
   View,
   Text,
@@ -6,378 +6,351 @@ import {
   ScrollView,
   Image,
   TouchableOpacity,
+  TextInput,
   Alert,
   Modal,
-  TextInput,
-  ActivityIndicator,
 } from 'react-native';
-import * as ImagePicker from 'expo-image-picker';
-import {
-  collection,
-  query,
-  where,
-  onSnapshot,
-  doc,
-  updateDoc,
-  arrayUnion,
-  deleteDoc,
-} from 'firebase/firestore';
+import { doc, updateDoc } from 'firebase/firestore';
 import { db } from '../../../firebaseConfig';
 import { useAuth } from '../../context/AuthContext';
-import { useRoom } from '../../context/RoomContext';
 import { useTheme } from '../../context/ThemeContext';
-import RoleBadge from '../../components/RoleBadge';
-import CustomButton from '../../components/CustomButton';
-
-const ALL_ROLES = [
-  'Director',
-  'Scriptwriter',
-  'Producer',
-  'Cinematographer',
-  'Camera Operator',
-  'Actor',
-  'Sound Designer',
-  'Boom Operator',
-  'Gaffer (Lighting)',
-  'Grip (Rigging)',
-  'Production Designer',
-  'Editor',
-  'Production Assistant (PA / Helper)',
-  'Runner / General Crew',
-];
 
 export default function ProfileDashboardScreen({ navigation }) {
   const { currentUser, userProfile } = useAuth();
-  const { switchRoom } = useRoom();
   const { theme } = useTheme();
 
-  const [invitations, setInvitations] = useState([]);
-  const [loadingInvites, setLoadingInvites] = useState(true);
+  const [activeTab, setActiveTab] = useState('Showreel');
+  const [isAvailable, setIsAvailable] = useState(userProfile?.isAvailable ?? true);
 
-  // Edit Profile States
-  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
-  const [editName, setEditName] = useState('');
-  const [editBio, setEditBio] = useState('');
-  const [editRoles, setEditRoles] = useState([]);
-  const [editAvatarBase64, setEditAvatarBase64] = useState(null);
-  const [isSavingEdit, setIsSavingEdit] = useState(false);
+  // In-Place Edit Modal
+  const [isEditing, setIsEditing] = useState(false);
+  const [editName, setEditName] = useState(userProfile?.fullName || '');
+  const [editBio, setEditBio] = useState(userProfile?.bio || '');
+  const [editDayRate, setEditDayRate] = useState(userProfile?.dayRate || '');
+  const [editLocation, setEditLocation] = useState(userProfile?.location || '');
+  const [editExperience, setEditExperience] = useState(userProfile?.experience || '');
+  const [isSaving, setIsSaving] = useState(false);
 
-  // Stream incoming room invitations in real time
-  useEffect(() => {
-    if (!currentUser) return;
+  // Equipment Kit Management
+  const [newKitText, setNewKitText] = useState('');
+  const equipmentList = userProfile?.equipment || [];
 
-    const q = query(
-      collection(db, 'invitations'),
-      where('recipientId', '==', currentUser.uid),
-      where('status', '==', 'PENDING')
-    );
-
-    const unsubscribe = onSnapshot(
-      q,
-      (snapshot) => {
-        const loadedInvites = snapshot.docs.map((d) => ({
-          id: d.id,
-          ...d.data(),
-        }));
-        setInvitations(loadedInvites);
-        setLoadingInvites(false);
-      },
-      (error) => {
-        console.error('Invitations listener error:', error);
-        setLoadingInvites(false);
-      }
-    );
-
-    return () => unsubscribe();
-  }, [currentUser]);
-
-  // Open Edit Modal with current values
-  const handleOpenEdit = () => {
-    setEditName(userProfile?.fullName || '');
-    setEditBio(userProfile?.bio || '');
-    setEditRoles(userProfile?.roles || []);
-    setEditAvatarBase64(userProfile?.photoURL || null);
-    setIsEditModalOpen(true);
-  };
-
-  const handlePickEditAvatar = async () => {
-    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!perm.granted) {
-      Alert.alert('Permission Required', 'Gallery access is needed to change photo.');
-      return;
-    }
-
-    const res = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      allowsEditing: true,
-      aspect: [1, 1],
-      quality: 0.3,
-      base64: true,
-    });
-
-    if (!res.canceled && res.assets && res.assets.length > 0) {
-      const asset = res.assets[0];
-      if (asset.base64) {
-        setEditAvatarBase64(`data:image/jpeg;base64,${asset.base64}`);
+  const handleToggleAvailability = async () => {
+    const nextState = !isAvailable;
+    setIsAvailable(nextState);
+    if (currentUser) {
+      try {
+        await updateDoc(doc(db, 'users', currentUser.uid), {
+          isAvailable: nextState,
+        });
+      } catch (err) {
+        console.error('Failed to toggle availability:', err);
       }
     }
   };
 
-  const toggleEditRole = (role) => {
-    if (editRoles.includes(role)) {
-      setEditRoles(editRoles.filter((r) => r !== role));
-    } else {
-      setEditRoles([...editRoles, role]);
-    }
-  };
-
-  const handleSaveEditProfile = async () => {
+  const handleSaveProfile = async () => {
     if (!editName.trim()) {
       Alert.alert('Required', 'Display name cannot be empty.');
       return;
     }
 
-    setIsSavingEdit(true);
+    setIsSaving(true);
     try {
-      const userRef = doc(db, 'users', currentUser.uid);
-      await updateDoc(userRef, {
-        fullName: editName.trim(),
-        displayName: editName.trim(),
-        bio: editBio.trim(),
-        roles: editRoles,
-        photoURL: editAvatarBase64,
-      });
-
-      setIsEditModalOpen(false);
+      if (currentUser) {
+        await updateDoc(doc(db, 'users', currentUser.uid), {
+          fullName: editName.trim(),
+          bio: editBio.trim(),
+          dayRate: editDayRate.trim(),
+          location: editLocation.trim(),
+          experience: editExperience.trim(),
+        });
+      }
+      setIsEditing(false);
       Alert.alert('Success', 'Profile updated successfully.');
-    } catch (err) {
-      Alert.alert('Save Failed', err.message);
+    } catch (error) {
+      Alert.alert('Save Failed', error.message);
     } finally {
-      setIsSavingEdit(false);
+      setIsSaving(false);
     }
   };
 
-  const handleAcceptInvite = async (invite) => {
+  const handleAddKitItem = async () => {
+    if (!newKitText.trim() || !currentUser) return;
+    const updatedList = [...equipmentList, newKitText.trim()];
     try {
-      const roomRef = doc(db, 'rooms', invite.roomId);
-      await updateDoc(roomRef, {
-        memberUids: arrayUnion(currentUser.uid),
-        [`members.${currentUser.uid}`]: {
-          displayName: userProfile?.fullName || currentUser.email,
-          email: currentUser.email,
-          roles: invite.assignedRoles || ['Crew'],
-          joinedAt: new Date().toISOString(),
-        },
+      await updateDoc(doc(db, 'users', currentUser.uid), {
+        equipment: updatedList,
       });
-
-      await deleteDoc(doc(db, 'invitations', invite.id));
-
-      Alert.alert('Joined Room', `You have joined "${invite.roomTitle}"!`, [
-        {
-          text: 'Enter Room',
-          onPress: () => {
-            switchRoom(invite.roomId);
-            navigation.navigate('FilmsTab', { screen: 'StagePipeline' });
-          },
-        },
-        { text: 'Later', style: 'cancel' },
-      ]);
-    } catch (error) {
-      Alert.alert('Error', error.message);
+      setNewKitText('');
+    } catch (e) {
+      Alert.alert('Error', e.message);
     }
   };
 
-  const handleRejectInvite = async (inviteId) => {
+  const handleRemoveKitItem = async (index) => {
+    if (!currentUser) return;
+    const updatedList = equipmentList.filter((_, i) => i !== index);
     try {
-      await deleteDoc(doc(db, 'invitations', inviteId));
-    } catch (error) {
-      Alert.alert('Error', error.message);
+      await updateDoc(doc(db, 'users', currentUser.uid), {
+        equipment: updatedList,
+      });
+    } catch (e) {
+      Alert.alert('Error', e.message);
     }
   };
 
   return (
-    <ScrollView style={[styles.container, { backgroundColor: theme?.background || '#121212' }]} contentContainerStyle={styles.content}>
-      {/* Top Header Bar with Settings Gear */}
-      <View style={styles.topBar}>
-        <Text style={[styles.pageTitle, { color: theme?.text || '#FFF' }]}>FILMMAKER PROFILE</Text>
+    <ScrollView style={[styles.container, { backgroundColor: theme.background || '#0c0d0e' }]} contentContainerStyle={styles.content}>
+      {/* Top Header Controls: Edit Profile on Top-Left, Settings on Top-Right */}
+      <View style={styles.topControlRow}>
         <TouchableOpacity
-          onPress={() => navigation.navigate('Settings')}
-          style={[styles.settingsIconBtn, { backgroundColor: theme?.card || '#1c1c1e' }]}
+          style={[styles.actionIconBtn, { borderColor: theme.cardBorder || '#242830' }]}
+          onPress={() => {
+            setEditName(userProfile?.fullName || '');
+            setEditBio(userProfile?.bio || '');
+            setEditDayRate(userProfile?.dayRate || '');
+            setEditLocation(userProfile?.location || '');
+            setEditExperience(userProfile?.experience || '');
+            setIsEditing(true);
+          }}
         >
-          <Text style={{ fontSize: 18 }}>⚙️</Text>
+          <Text style={[styles.controlText, { color: theme.text || '#ffffff' }]}>✎ Edit Profile</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.actionIconBtn, { borderColor: theme.cardBorder || '#242830' }]}
+          onPress={() => navigation.navigate('Settings')}
+        >
+          <Text style={{ fontSize: 16 }}>⚙️</Text>
         </TouchableOpacity>
       </View>
 
-      {/* Profile Card */}
-      <View style={[styles.profileCard, { backgroundColor: theme?.card || '#1c1c1e', borderColor: theme?.border || '#2c2c2e' }]}>
-        <View style={styles.headerRow}>
-          {userProfile?.photoURL ? (
-            <Image source={{ uri: userProfile.photoURL }} style={styles.avatar} />
-          ) : (
-            <View style={[styles.avatarPlaceholder, { backgroundColor: theme?.surface || '#2c2c2e' }]}>
-              <Text style={[styles.avatarInitial, { color: theme?.primary || '#e50914' }]}>
-                {userProfile?.fullName ? userProfile.fullName[0].toUpperCase() : 'F'}
-              </Text>
-            </View>
-          )}
+      {/* Profile Header: Avatar & Availability Pill on Left, Details on Right */}
+      <View style={styles.profileHeader}>
+        <View style={styles.avatarColumn}>
+          <View style={styles.avatarWrapper}>
+            {userProfile?.photoURL ? (
+              <Image source={{ uri: userProfile.photoURL }} style={styles.avatar} />
+            ) : (
+              <View style={[styles.avatarPlaceholder, { backgroundColor: theme.surface || '#121417' }]}>
+                <Text style={[styles.avatarInitial, { color: theme.primary || '#f5a623' }]}>
+                  {userProfile?.fullName ? userProfile.fullName[0].toUpperCase() : 'F'}
+                </Text>
+              </View>
+            )}
+            <View
+              style={[
+                styles.avatarOnlineDot,
+                { backgroundColor: isAvailable ? theme.accentGreen || '#22c55e' : '#888888' },
+              ]}
+            />
+          </View>
 
-          <View style={styles.infoCol}>
-            <Text style={[styles.fullName, { color: theme?.text || '#FFF' }]}>
+          {/* Availability pill positioned directly below avatar */}
+          <TouchableOpacity
+            style={[styles.statusUnderAvatarBtn, { borderColor: isAvailable ? '#1e3d29' : '#333333' }]}
+            onPress={handleToggleAvailability}
+          >
+            <View style={[styles.statusDot, { backgroundColor: isAvailable ? theme.accentGreen || '#22c55e' : '#888888' }]} />
+            <Text style={[styles.statusUnderAvatarText, { color: isAvailable ? '#4ade80' : theme.textSecondary || '#9ca3af' }]}>
+              {isAvailable ? 'Available' : 'Busy'}
+            </Text>
+          </TouchableOpacity>
+        </View>
+
+        <View style={styles.nameBlock}>
+          <View style={styles.nameRow}>
+            <Text style={[styles.fullName, { color: theme.text || '#ffffff' }]}>
               {userProfile?.fullName || 'Filmmaker'}
             </Text>
-            <Text style={[styles.username, { color: theme?.textSecondary || '#888' }]}>
-              @{userProfile?.username || 'crew'}
+            {userProfile?.roles && userProfile.roles.length > 0 && (
+              <View style={[styles.departmentBadge, { backgroundColor: '#2a2215' }]}>
+                <Text style={[styles.departmentText, { color: theme.primary || '#f5a623' }]}>
+                  {userProfile.roles[0]}
+                </Text>
+              </View>
+            )}
+          </View>
+
+          <Text style={[styles.metaLocation, { color: theme.textSecondary || '#9ca3af' }]}>
+            @{userProfile?.username || 'crew'}
+            {userProfile?.location ? ` • 📍 ${userProfile.location}` : ''}
+            {userProfile?.experience ? ` • ${userProfile.experience}` : ''}
+          </Text>
+
+          {userProfile?.dayRate ? (
+            <Text style={[styles.rateHighlight, { color: theme.primary || '#f5a623' }]}>
+              {userProfile.dayRate}
             </Text>
-            <Text style={[styles.email, { color: theme?.textSecondary || '#888' }]}>
-              {currentUser?.email}
+          ) : null}
+        </View>
+      </View>
+
+      {/* Bio Section */}
+      <Text style={[styles.bioText, { color: theme.textSecondary || '#9ca3af' }]}>
+        {userProfile?.bio ? userProfile.bio : 'No bio added yet. Tap "Edit Profile" to add your experience.'}
+      </Text>
+
+      {/* Departments */}
+      {userProfile?.roles && userProfile.roles.length > 0 && (
+        <View style={styles.genreSection}>
+          <Text style={[styles.genreLabel, { color: theme.textMuted || '#64748b' }]}>Departments:</Text>
+          {userProfile.roles.map((r) => (
+            <View key={r} style={[styles.genreChip, { backgroundColor: theme.card || '#181b1f', borderColor: theme.cardBorder || '#242830' }]}>
+              <Text style={[styles.genreChipText, { color: theme.textSecondary || '#9ca3af' }]}>{r}</Text>
+            </View>
+          ))}
+        </View>
+      )}
+
+      {/* 4 Tabs Bar */}
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.tabNavRow}>
+        {[
+          { key: 'Showreel', label: '🎬 Showreel' },
+          { key: 'Stills & Posters', label: '🖼 Stills & Posters' },
+          { key: 'Equipment Kit', label: `🔧 Equipment Kit (${equipmentList.length})` },
+          { key: 'Credits & Accolades', label: '🎗 Credits & Accolades' },
+        ].map((tab) => {
+          const isActive = activeTab === tab.key;
+          return (
+            <TouchableOpacity
+              key={tab.key}
+              style={[styles.tabButton, isActive && { borderBottomColor: theme.primary || '#f5a623', borderBottomWidth: 2 }]}
+              onPress={() => setActiveTab(tab.key)}
+            >
+              <Text style={[styles.tabButtonText, { color: isActive ? theme.primary || '#f5a623' : theme.textMuted || '#64748b' }]}>
+                {tab.label}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </ScrollView>
+
+      {/* Tab Content */}
+      {activeTab === 'Showreel' && (
+        <View style={styles.tabContainer}>
+          <View style={[styles.videoPlaceholder, { backgroundColor: '#000000', borderColor: theme.cardBorder || '#242830' }]}>
+            <Text style={{ fontSize: 40 }}>🎬</Text>
+            <Text style={{ color: theme.textSecondary || '#9ca3af', marginTop: 8, fontSize: 12 }}>
+              {userProfile?.showreelUrl ? userProfile.showreelUrl : 'No showreel link attached yet.'}
             </Text>
           </View>
         </View>
+      )}
 
-        {userProfile?.bio ? (
-          <Text style={[styles.bio, { color: theme?.textSecondary || '#AAA' }]}>
-            {userProfile.bio}
-          </Text>
-        ) : null}
+      {activeTab === 'Stills & Posters' && (
+        <View style={styles.tabContainer}>
+          <View style={[styles.emptyTabCard, { borderColor: theme.cardBorder || '#242830' }]}>
+            <Text style={{ color: theme.textSecondary || '#9ca3af', fontSize: 13, fontStyle: 'italic' }}>
+              No production stills or festival posters uploaded.
+            </Text>
+          </View>
+        </View>
+      )}
 
-        {/* Roles Badges */}
-        <Text style={[styles.sectionHeading, { color: theme?.textSecondary || '#888' }]}>SKILLS & DEPARTMENTS</Text>
-        <View style={styles.rolesRow}>
-          {userProfile?.roles && userProfile.roles.length > 0 ? (
-            userProfile.roles.map((r) => <RoleBadge key={r} role={r} />)
+      {activeTab === 'Equipment Kit' && (
+        <View style={styles.tabContainer}>
+          <View style={styles.addKitRow}>
+            <TextInput
+              style={[styles.addKitInput, { backgroundColor: theme.card || '#181b1f', color: theme.text || '#ffffff', borderColor: theme.cardBorder || '#242830' }]}
+              placeholder="Add camera package, lens set, audio gear..."
+              placeholderTextColor={theme.textMuted || '#64748b'}
+              value={newKitText}
+              onChangeText={setNewKitText}
+            />
+            <TouchableOpacity style={[styles.addKitBtn, { backgroundColor: theme.primary || '#f5a623' }]} onPress={handleAddKitItem}>
+              <Text style={styles.addKitBtnText}>+ Add</Text>
+            </TouchableOpacity>
+          </View>
+
+          {equipmentList.length > 0 ? (
+            equipmentList.map((item, index) => (
+              <View key={index} style={[styles.gearCard, { backgroundColor: theme.card || '#181b1f', borderColor: theme.cardBorder || '#242830' }]}>
+                <Text style={{ color: theme.primary || '#f5a623', marginRight: 10 }}>✔</Text>
+                <Text style={[styles.gearTitle, { color: theme.text || '#ffffff' }]}>{item}</Text>
+                <TouchableOpacity onPress={() => handleRemoveKitItem(index)} style={styles.removeGearBtn}>
+                  <Text style={{ color: theme.textMuted || '#64748b', fontSize: 14 }}>✕</Text>
+                </TouchableOpacity>
+              </View>
+            ))
           ) : (
-            <Text style={{ color: theme?.textSecondary || '#888', fontSize: 12 }}>No default roles assigned.</Text>
+            <Text style={{ color: theme.textSecondary || '#9ca3af', fontStyle: 'italic', marginTop: 10 }}>
+              No owned gear listed.
+            </Text>
           )}
         </View>
+      )}
 
-        {/* Edit Profile Trigger Button */}
-        <TouchableOpacity
-          style={[styles.editButton, { borderColor: theme?.border || '#333' }]}
-          onPress={handleOpenEdit}
-        >
-          <Text style={[styles.editButtonText, { color: theme?.text || '#FFF' }]}>✎ Edit Profile</Text>
-        </TouchableOpacity>
-      </View>
-
-      {/* Incoming Room Invitations */}
-      <View style={styles.sectionHeader}>
-        <Text style={[styles.sectionTitle, { color: theme?.text || '#FFF' }]}>INCOMING FILM INVITATIONS</Text>
-        <Text style={[styles.badgeCount, { backgroundColor: theme?.primary || '#e50914' }]}>
-          {invitations.length}
-        </Text>
-      </View>
-
-      {loadingInvites ? (
-        <ActivityIndicator color={theme?.primary || '#e50914'} style={{ marginVertical: 20 }} />
-      ) : invitations.length > 0 ? (
-        invitations.map((inv) => (
-          <View
-            key={inv.id}
-            style={[styles.inviteCard, { backgroundColor: theme?.card || '#1c1c1e', borderColor: theme?.border || '#2c2c2e' }]}
-          >
-            <View style={styles.inviteInfo}>
-              <Text style={[styles.roomName, { color: theme?.text || '#FFF' }]}>{inv.roomTitle}</Text>
-              <Text style={[styles.inviter, { color: theme?.textSecondary || '#888' }]}>
-                Invited by {inv.senderName}
-              </Text>
-              <View style={{ flexDirection: 'row', gap: 4, marginTop: 4 }}>
-                {inv.assignedRoles?.map((r) => (
-                  <RoleBadge key={r} role={r} size="small" />
-                ))}
-              </View>
-            </View>
-
-            <View style={styles.inviteActions}>
-              <TouchableOpacity
-                style={[styles.actionBtn, { backgroundColor: theme?.primary || '#e50914' }]}
-                onPress={() => handleAcceptInvite(inv)}
-              >
-                <Text style={styles.btnText}>Join</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.actionBtn, { backgroundColor: theme?.surface || '#2c2c2e' }]}
-                onPress={() => handleRejectInvite(inv.id)}
-              >
-                <Text style={[styles.btnText, { color: theme?.textSecondary || '#888' }]}>Decline</Text>
-              </TouchableOpacity>
-            </View>
+      {activeTab === 'Credits & Accolades' && (
+        <View style={styles.tabContainer}>
+          <View style={[styles.emptyTabCard, { borderColor: theme.cardBorder || '#242830' }]}>
+            <Text style={{ color: theme.textSecondary || '#9ca3af', fontSize: 13, fontStyle: 'italic' }}>
+              No project credits or festival honors listed yet.
+            </Text>
           </View>
-        ))
-      ) : (
-        <View style={[styles.emptyBox, { borderColor: theme?.border || '#2c2c2e' }]}>
-          <Text style={[styles.emptyText, { color: theme?.textSecondary || '#888' }]}>
-            No pending room invitations.
-          </Text>
         </View>
       )}
 
       {/* Edit Profile Modal */}
-      <Modal visible={isEditModalOpen} animationType="slide" transparent>
+      <Modal visible={isEditing} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
-          <View style={[styles.modalContent, { backgroundColor: theme?.card || '#1c1c1e', borderColor: theme?.border || '#333' }]}>
-            <Text style={[styles.modalTitle, { color: theme?.text || '#FFF' }]}>EDIT PROFILE</Text>
+          <View style={[styles.modalContent, { backgroundColor: theme.card || '#181b1f', borderColor: theme.cardBorder || '#242830' }]}>
+            <Text style={[styles.modalTitle, { color: theme.text || '#ffffff' }]}>EDIT PROFILE</Text>
 
             <ScrollView showsVerticalScrollIndicator={false}>
-              <TouchableOpacity style={styles.editAvatarWrapper} onPress={handlePickEditAvatar}>
-                {editAvatarBase64 ? (
-                  <Image source={{ uri: editAvatarBase64 }} style={styles.editAvatarImage} />
-                ) : (
-                  <View style={styles.avatarPlaceholder}>
-                    <Text style={{ color: '#AAA' }}>+ Photo</Text>
-                  </View>
-                )}
-                <Text style={styles.changePhotoText}>Change Avatar</Text>
-              </TouchableOpacity>
-
-              <Text style={styles.fieldLabel}>Display Name</Text>
+              <Text style={[styles.fieldLabel, { color: theme.textSecondary || '#9ca3af' }]}>DISPLAY NAME</Text>
               <TextInput
-                style={[styles.modalInput, { backgroundColor: theme?.surface || '#2c2c2e', color: theme?.text || '#FFF' }]}
+                style={[styles.modalInput, { backgroundColor: theme.surface || '#121417', color: theme.text || '#ffffff', borderColor: theme.cardBorder || '#242830' }]}
                 value={editName}
                 onChangeText={setEditName}
               />
 
-              <Text style={styles.fieldLabel}>Bio</Text>
+              <Text style={[styles.fieldLabel, { color: theme.textSecondary || '#9ca3af' }]}>BIO / EXPERIENCE</Text>
               <TextInput
-                style={[styles.modalInput, { backgroundColor: theme?.surface || '#2c2c2e', color: theme?.text || '#FFF', height: 70 }]}
+                style={[styles.modalInput, { backgroundColor: theme.surface || '#121417', color: theme.text || '#ffffff', borderColor: theme.cardBorder || '#242830', height: 70 }]}
                 value={editBio}
                 onChangeText={setEditBio}
                 multiline
               />
 
-              <Text style={styles.fieldLabel}>Select Roles</Text>
-              <View style={styles.rolesGrid}>
-                {ALL_ROLES.map((role) => {
-                  const sel = editRoles.includes(role);
-                  return (
-                    <TouchableOpacity
-                      key={role}
-                      style={[styles.roleChip, sel && { backgroundColor: theme?.primary || '#e50914' }]}
-                      onPress={() => toggleEditRole(role)}
-                    >
-                      <Text style={[styles.roleChipText, sel && { color: '#FFF' }]}>{role}</Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
+              <Text style={[styles.fieldLabel, { color: theme.textSecondary || '#9ca3af' }]}>LOCATION</Text>
+              <TextInput
+                style={[styles.modalInput, { backgroundColor: theme.surface || '#121417', color: theme.text || '#ffffff', borderColor: theme.cardBorder || '#242830' }]}
+                value={editLocation}
+                onChangeText={setEditLocation}
+              />
+
+              <Text style={[styles.fieldLabel, { color: theme.textSecondary || '#9ca3af' }]}>EXPERIENCE</Text>
+              <TextInput
+                style={[styles.modalInput, { backgroundColor: theme.surface || '#121417', color: theme.text || '#ffffff', borderColor: theme.cardBorder || '#242830' }]}
+                value={editExperience}
+                onChangeText={setEditExperience}
+              />
+
+              <Text style={[styles.fieldLabel, { color: theme.textSecondary || '#9ca3af' }]}>DAY RATE & TERMS</Text>
+              <TextInput
+                style={[styles.modalInput, { backgroundColor: theme.surface || '#121417', color: theme.text || '#ffffff', borderColor: theme.cardBorder || '#242830' }]}
+                value={editDayRate}
+                onChangeText={setEditDayRate}
+              />
 
               <View style={styles.modalBtnRow}>
                 <TouchableOpacity
-                  style={[styles.cancelBtn, { backgroundColor: theme?.surface || '#2c2c2e' }]}
-                  onPress={() => setIsEditModalOpen(false)}
+                  style={[styles.modalCancelBtn, { backgroundColor: theme.surface || '#121417' }]}
+                  onPress={() => setIsEditing(false)}
                 >
-                  <Text style={{ color: theme?.text || '#FFF' }}>Cancel</Text>
+                  <Text style={{ color: theme.textSecondary || '#9ca3af', fontWeight: 'bold' }}>Cancel</Text>
                 </TouchableOpacity>
 
                 <TouchableOpacity
-                  style={[styles.saveBtn, { backgroundColor: theme?.primary || '#e50914' }]}
-                  onPress={handleSaveEditProfile}
-                  disabled={isSavingEdit}
+                  style={[styles.modalSaveBtn, { backgroundColor: theme.primary || '#f5a623' }]}
+                  onPress={handleSaveProfile}
+                  disabled={isSaving}
                 >
-                  {isSavingEdit ? (
-                    <ActivityIndicator size="small" color="#FFF" />
-                  ) : (
-                    <Text style={{ color: '#FFF', fontWeight: 'bold' }}>Save</Text>
-                  )}
+                  <Text style={{ color: '#000000', fontWeight: 'bold' }}>
+                    {isSaving ? 'Saving...' : 'Save Changes'}
+                  </Text>
                 </TouchableOpacity>
               </View>
             </ScrollView>
@@ -390,88 +363,73 @@ export default function ProfileDashboardScreen({ navigation }) {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  content: { padding: 16, paddingTop: 40, paddingBottom: 60 },
-  topBar: {
+  content: { padding: 16, paddingTop: 44, paddingBottom: 60 },
+  topControlRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: 16,
   },
-  pageTitle: { fontSize: 20, fontWeight: '900', letterSpacing: 1 },
-  settingsIconBtn: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  profileCard: { padding: 16, borderRadius: 12, borderWidth: 1, marginBottom: 20 },
-  headerRow: { flexDirection: 'row', alignItems: 'center', gap: 14 },
-  avatar: { width: 64, height: 64, borderRadius: 32 },
-  avatarPlaceholder: { width: 64, height: 64, borderRadius: 32, justifyContent: 'center', alignItems: 'center' },
-  avatarInitial: { fontSize: 26, fontWeight: 'bold' },
-  infoCol: { flex: 1 },
-  fullName: { fontSize: 18, fontWeight: '900', letterSpacing: 0.5 },
-  username: { fontSize: 13, fontWeight: '600', marginTop: 1 },
-  email: { fontSize: 11, marginTop: 2 },
-  bio: { fontSize: 13, marginTop: 12, lineHeight: 18 },
-  sectionHeading: { fontSize: 10, fontWeight: '800', letterSpacing: 1, marginTop: 14, marginBottom: 8 },
-  rolesRow: { flexDirection: 'row', flexWrap: 'wrap' },
-  editButton: {
-    marginTop: 14,
-    paddingVertical: 8,
+  actionIconBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 7,
     borderRadius: 6,
     borderWidth: 1,
-    alignItems: 'center',
-  },
-  editButtonText: { fontSize: 12, fontWeight: '700' },
-  sectionHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10 },
-  sectionTitle: { fontSize: 14, fontWeight: '900', letterSpacing: 0.8 },
-  badgeCount: { color: '#FFF', fontSize: 11, fontWeight: 'bold', paddingHorizontal: 7, paddingVertical: 2, borderRadius: 10 },
-  inviteCard: {
-    padding: 14,
-    borderRadius: 8,
-    borderWidth: 1,
-    marginBottom: 8,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  inviteInfo: { flex: 1 },
-  roomName: { fontSize: 15, fontWeight: 'bold' },
-  inviter: { fontSize: 12, marginVertical: 2 },
-  inviteActions: { flexDirection: 'row', gap: 8 },
-  actionBtn: { paddingVertical: 6, paddingHorizontal: 12, borderRadius: 6 },
-  btnText: { color: '#FFF', fontSize: 12, fontWeight: 'bold' },
-  emptyBox: { padding: 20, borderWidth: 1, borderStyle: 'dashed', borderRadius: 8, alignItems: 'center' },
-  emptyText: { fontSize: 12, fontStyle: 'italic' },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.7)',
+    backgroundColor: '#121417',
     justifyContent: 'center',
-    padding: 20,
+    alignItems: 'center',
   },
-  modalContent: {
-    maxHeight: '85%',
+  controlText: { fontSize: 12, fontWeight: '700' },
+  profileHeader: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 12 },
+  avatarColumn: { alignItems: 'center', marginRight: 14 },
+  avatarWrapper: { position: 'relative' },
+  avatar: { width: 68, height: 68, borderRadius: 10 },
+  avatarPlaceholder: { width: 68, height: 68, borderRadius: 10, justifyContent: 'center', alignItems: 'center' },
+  avatarInitial: { fontSize: 26, fontWeight: 'bold' },
+  avatarOnlineDot: { position: 'absolute', bottom: -2, right: -2, width: 14, height: 14, borderRadius: 7, borderWidth: 2, borderColor: '#0c0d0e' },
+  statusUnderAvatarBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
     borderRadius: 12,
     borderWidth: 1,
-    padding: 20,
+    backgroundColor: '#121417',
+    marginTop: 8,
   },
-  modalTitle: { fontSize: 18, fontWeight: '900', letterSpacing: 1, marginBottom: 16 },
-  editAvatarWrapper: { alignItems: 'center', marginBottom: 14 },
-  editAvatarImage: { width: 70, height: 70, borderRadius: 35 },
-  changePhotoText: { color: '#e50914', fontSize: 12, fontWeight: 'bold', marginTop: 6 },
-  fieldLabel: { color: '#AAA', fontSize: 11, fontWeight: '700', marginTop: 10, marginBottom: 4 },
-  modalInput: { borderRadius: 8, padding: 10, fontSize: 14 },
-  rolesGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginVertical: 6 },
-  roleChip: {
-    backgroundColor: '#262626',
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 14,
-  },
-  roleChipText: { color: '#888', fontSize: 11, fontWeight: '600' },
-  modalBtnRow: { flexDirection: 'row', justifyContent: 'flex-end', gap: 10, marginTop: 20, marginBottom: 10 },
-  cancelBtn: { paddingVertical: 8, paddingHorizontal: 16, borderRadius: 6 },
-  saveBtn: { paddingVertical: 8, paddingHorizontal: 20, borderRadius: 6 },
+  statusDot: { width: 6, height: 6, borderRadius: 3, marginRight: 5 },
+  statusUnderAvatarText: { fontSize: 10, fontWeight: '800' },
+  nameBlock: { flex: 1, paddingTop: 2 },
+  nameRow: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
+  fullName: { fontSize: 18, fontWeight: '900' },
+  departmentBadge: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: 4 },
+  departmentText: { fontSize: 10, fontWeight: 'bold' },
+  metaLocation: { fontSize: 11, marginTop: 4 },
+  rateHighlight: { fontSize: 12, fontWeight: 'bold', marginTop: 4 },
+  bioText: { fontSize: 13, lineHeight: 19, marginVertical: 10 },
+  genreSection: { flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginBottom: 16 },
+  genreLabel: { fontSize: 11, fontWeight: '600' },
+  genreChip: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 4, borderWidth: 1 },
+  genreChipText: { fontSize: 11, fontWeight: '600' },
+  tabNavRow: { flexDirection: 'row', borderBottomWidth: 1, borderColor: '#222', marginBottom: 16 },
+  tabButton: { paddingVertical: 10, paddingHorizontal: 12, marginRight: 8 },
+  tabButtonText: { fontSize: 13, fontWeight: '700' },
+  tabContainer: { marginTop: 4 },
+  videoPlaceholder: { height: 180, borderRadius: 8, borderWidth: 1, justifyContent: 'center', alignItems: 'center' },
+  emptyTabCard: { padding: 24, borderRadius: 8, borderWidth: 1, borderStyle: 'dashed', alignItems: 'center' },
+  addKitRow: { flexDirection: 'row', gap: 8, marginBottom: 12 },
+  addKitInput: { flex: 1, borderRadius: 6, borderWidth: 1, paddingHorizontal: 12, fontSize: 13 },
+  addKitBtn: { paddingHorizontal: 14, borderRadius: 6, justifyContent: 'center' },
+  addKitBtnText: { color: '#000000', fontSize: 12, fontWeight: '800' },
+  gearCard: { flexDirection: 'row', alignItems: 'center', padding: 12, borderRadius: 6, borderWidth: 1, marginBottom: 8 },
+  gearTitle: { flex: 1, fontSize: 13, fontWeight: '600' },
+  removeGearBtn: { padding: 4 },
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.85)', justifyContent: 'center', padding: 20 },
+  modalContent: { maxHeight: '90%', borderRadius: 12, borderWidth: 1, padding: 18 },
+  modalTitle: { fontSize: 18, fontWeight: '900', letterSpacing: 1, marginBottom: 12 },
+  fieldLabel: { fontSize: 10, fontWeight: '700', marginTop: 10, marginBottom: 4 },
+  modalInput: { borderRadius: 6, borderWidth: 1, padding: 10, fontSize: 13 },
+  modalBtnRow: { flexDirection: 'row', justifyContent: 'flex-end', gap: 10, marginTop: 20 },
+  modalCancelBtn: { paddingVertical: 10, paddingHorizontal: 16, borderRadius: 6 },
+  modalSaveBtn: { paddingVertical: 10, paddingHorizontal: 18, borderRadius: 6 },
 });

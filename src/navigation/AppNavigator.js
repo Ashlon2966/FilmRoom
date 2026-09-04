@@ -1,9 +1,10 @@
-import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import React, { useState } from 'react';
+import { View, Text, StyleSheet } from 'react-native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 
 // Screens
+import ExploreDirectoryScreen from '../screens/dashboard/ExploreDirectoryScreen';
 import RoomsListScreen from '../screens/dashboard/RoomsListScreen';
 import CreateRoomScreen from '../screens/dashboard/CreateRoomScreen';
 import ProfileDashboardScreen from '../screens/dashboard/ProfileDashboardScreen';
@@ -12,19 +13,20 @@ import ChatScreen from '../screens/roles/ChatScreen';
 import ConversationsListScreen from '../screens/chat/ConversationsListScreen';
 import DirectMessageScreen from '../screens/chat/DirectMessageScreen';
 
-// 5-Stage Pipeline Screens
+// 5 Pipeline Stages
 import Stage1_IdeationScreen from '../screens/pipeline/Stage1_IdeationScreen';
 import Stage2_ScreenplayScreen from '../screens/pipeline/Stage2_ScreenplayScreen';
 import Stage3_PreProdScreen from '../screens/pipeline/Stage3_PreProdScreen';
 import Stage4_ProductionScreen from '../screens/pipeline/Stage4_ProductionScreen';
 import Stage5_PostProdScreen from '../screens/pipeline/Stage5_PostProdScreen';
 
+// Modals
+import CreateActionSheetModal from '../components/CreateActionSheetModal';
 import { useTheme } from '../context/ThemeContext';
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
 
-// 5 Production Stages Stack
 function PipelineStack() {
   return (
     <Stack.Navigator screenOptions={{ headerShown: false }}>
@@ -37,8 +39,7 @@ function PipelineStack() {
   );
 }
 
-// Rooms Stack
-function RoomsStack() {
+function TheBoardStack() {
   return (
     <Stack.Navigator screenOptions={{ headerShown: false }}>
       <Stack.Screen name="RoomsList" component={RoomsListScreen} />
@@ -48,8 +49,7 @@ function RoomsStack() {
   );
 }
 
-// Direct Messages Stack
-function ChatStack() {
+function MessagesStack() {
   return (
     <Stack.Navigator screenOptions={{ headerShown: false }}>
       <Stack.Screen name="ConversationsList" component={ConversationsListScreen} />
@@ -58,7 +58,6 @@ function ChatStack() {
   );
 }
 
-// Profile & Settings Stack
 function ProfileStack() {
   return (
     <Stack.Navigator screenOptions={{ headerShown: false }}>
@@ -68,110 +67,127 @@ function ProfileStack() {
   );
 }
 
-// Empty component for the center action button trigger
 function EmptyScreen() {
   return null;
 }
 
 export default function AppNavigator({ navigation }) {
   const { theme } = useTheme();
+  const [isActionSheetVisible, setIsActionSheetVisible] = useState(false);
 
   return (
-    <Tab.Navigator
-      screenOptions={{
-        headerShown: false,
-        tabBarStyle: {
-          backgroundColor: theme?.card || '#1c1c1e',
-          borderTopColor: theme?.border || '#2c2c2e',
-          height: 60,
-          paddingBottom: 8,
-          paddingTop: 6,
-        },
-        tabBarActiveTintColor: theme?.primary || '#e50914',
-        tabBarInactiveTintColor: theme?.textSecondary || '#888888',
-      }}
-    >
-      {/* 1. Films (Far Left) */}
-      <Tab.Screen
-        name="FilmsTab"
-        component={RoomsStack}
-        options={{
-          tabBarLabel: 'Films',
-          tabBarIcon: ({ color }) => <Text style={{ fontSize: 18 }}>🎬</Text>,
-        }}
-      />
-
-      {/* 2. Room Broadcast Chat */}
-      <Tab.Screen
-        name="RoomChatTab"
-        component={ChatScreen}
-        options={{
-          tabBarLabel: 'Room Chat',
-          tabBarIcon: ({ color }) => <Text style={{ fontSize: 18 }}>📢</Text>,
-        }}
-      />
-
-      {/* 3. Center Create Action Button */}
-      <Tab.Screen
-        name="CreateAction"
-        component={EmptyScreen}
-        options={({ navigation }) => ({
-          tabBarLabel: '',
-          tabBarIcon: () => (
-            <View style={[styles.centerCreateButton, { backgroundColor: theme?.primary || '#e50914' }]}>
-              <Text style={styles.centerCreateIcon}>+</Text>
-            </View>
-          ),
-        })}
-        listeners={({ navigation }) => ({
-          tabPress: (e) => {
-            e.preventDefault(); // Stop default tab navigation
-            navigation.navigate('FilmsTab', { screen: 'CreateRoom' });
+    <>
+      <Tab.Navigator
+        screenOptions={{
+          headerShown: false,
+          tabBarStyle: {
+            backgroundColor: theme?.card || '#181b1f',
+            borderTopColor: theme?.cardBorder || '#242830',
+            height: 62,
+            paddingBottom: 8,
+            paddingTop: 6,
           },
-        })}
-      />
+          tabBarActiveTintColor: theme?.primary || '#f5a623',
+          tabBarInactiveTintColor: theme?.textMuted || '#64748b',
+        }}
+      >
+        {/* 1. Explore */}
+        <Tab.Screen
+          name="ExploreTab"
+          component={ExploreDirectoryScreen}
+          options={{
+            tabBarLabel: 'Explore',
+            tabBarIcon: () => <Text style={{ fontSize: 18 }}>🧭</Text>,
+          }}
+        />
 
-      {/* 4. Direct Messages */}
-      <Tab.Screen
-        name="MessagesTab"
-        component={ChatStack}
-        options={{
-          tabBarLabel: 'Messages',
-          tabBarIcon: ({ color }) => <Text style={{ fontSize: 18 }}>💬</Text>,
+        {/* 2. The Board */}
+        <Tab.Screen
+          name="TheBoardTab"
+          component={TheBoardStack}
+          options={{
+            tabBarLabel: 'The Board',
+            tabBarIcon: () => <Text style={{ fontSize: 18 }}>🎬</Text>,
+          }}
+        />
+
+        {/* 3. Center Create (+) Action Button */}
+        <Tab.Screen
+          name="CreateAction"
+          component={EmptyScreen}
+          options={{
+            tabBarLabel: '',
+            tabBarIcon: () => (
+              <View style={[styles.centerCreateButton, { backgroundColor: theme?.primary || '#f5a623' }]}>
+                <Text style={styles.centerCreateIcon}>+</Text>
+              </View>
+            ),
+          }}
+          listeners={{
+            tabPress: (e) => {
+              e.preventDefault();
+              setIsActionSheetVisible(true);
+            },
+          }}
+        />
+
+        {/* 4. Messages */}
+        <Tab.Screen
+          name="MessagesTab"
+          component={MessagesStack}
+          options={{
+            tabBarLabel: 'Messages',
+            tabBarIcon: () => <Text style={{ fontSize: 18 }}>💬</Text>,
+          }}
+        />
+
+        {/* 5. My Profile */}
+        <Tab.Screen
+          name="ProfileTab"
+          component={ProfileStack}
+          options={{
+            tabBarLabel: 'My Profile',
+            tabBarIcon: () => <Text style={{ fontSize: 18 }}>👤</Text>,
+          }}
+        />
+      </Tab.Navigator>
+
+      {/* The 3-Option Action Sheet */}
+      <CreateActionSheetModal
+        visible={isActionSheetVisible}
+        onClose={() => setIsActionSheetVisible(false)}
+        onCreateRoom={() => {
+          navigation.navigate('TheBoardTab', { screen: 'CreateRoom' });
+        }}
+        onAddFriends={() => {
+          navigation.navigate('MessagesTab', { screen: 'ConversationsList' });
+        }}
+        onPostAchievement={() => {
+          navigation.navigate('ProfileTab', { screen: 'ProfileMain' });
         }}
       />
-
-      {/* 5. Profile & Settings (Far Right) */}
-      <Tab.Screen
-        name="ProfileTab"
-        component={ProfileStack}
-        options={{
-          tabBarLabel: 'Profile',
-          tabBarIcon: ({ color }) => <Text style={{ fontSize: 18 }}>👤</Text>,
-        }}
-      />
-    </Tab.Navigator>
+    </>
   );
 }
 
 const styles = StyleSheet.create({
   centerCreateButton: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
+    width: 50,
+    height: 50,
+    borderRadius: 25,
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 16,
+    marginBottom: 18,
     elevation: 6,
     shadowColor: '#000',
-    shadowOpacity: 0.35,
+    shadowOpacity: 0.4,
     shadowOffset: { width: 0, height: 3 },
     shadowRadius: 4,
   },
   centerCreateIcon: {
-    color: '#ffffff',
+    color: '#000000',
     fontSize: 28,
-    fontWeight: '300',
+    fontWeight: '700',
     lineHeight: 30,
   },
 });

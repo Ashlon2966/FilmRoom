@@ -2,185 +2,134 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
+  StyleSheet,
   FlatList,
   TextInput,
   TouchableOpacity,
-  StyleSheet,
   KeyboardAvoidingView,
   Platform,
   Alert,
+  Modal,
+  Pressable,
 } from 'react-native';
 import {
   collection,
   addDoc,
-  doc,
   query,
   orderBy,
   onSnapshot,
   serverTimestamp,
-  updateDoc,
+  doc,
   setDoc,
+  getDocs,
+  deleteDoc,
+  updateDoc,
   arrayUnion,
-  arrayRemove,
 } from 'firebase/firestore';
 import { db } from '../../../firebaseConfig';
 import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
+import BackButton from '../../components/BackButton';
 
-export default function DirectMessageScreen({ route }) {
-  const { peerUser } = route.params;
+export default function DirectMessageScreen({ route, navigation }) {
+  const { peerUser } = route.params || {};
   const { currentUser, userProfile } = useAuth();
   const { theme } = useTheme();
 
   const [messages, setMessages] = useState([]);
   const [inputText, setInputText] = useState('');
-  const [myClearedTimestamp, setMyClearedTimestamp] = useState(0);
+  const [isMenuVisible, setIsMenuVisible] = useState(false);
   const flatListRef = useRef(null);
 
-  const threadId = [currentUser.uid, peerUser.id].sort().join('_');
-  const isPeerBlockedByMe = userProfile?.blockedUsers?.includes(peerUser.id);
-  const [isMeBlockedByPeer, setIsMeBlockedByPeer] = useState(false);
+  const threadId =
+    currentUser?.uid < peerUser?.id
+      ? `${currentUser?.uid}_${peerUser?.id}`
+      : `${peerUser?.id}_${currentUser?.uid}`;
 
-  // 1. Listen to thread metadata for one-sided clear timestamps
+  // Stream messages from Firestore
   useEffect(() => {
-    const threadDocRef = doc(db, 'direct_threads', threadId);
-    const unsubscribeThread = onSnapshot(threadDocRef, (snap) => {
-      if (snap.exists()) {
-        const data = snap.data();
-        const clearedMillis = data?.clearedAt?.[currentUser.uid] || 0;
-        setMyClearedTimestamp(clearedMillis);
-      }
-    });
+    if (!threadId) return;
 
-    return () => unsubscribeThread();
-  }, [threadId, currentUser.uid]);
-
-  // 2. Stream peer blocking state
-  useEffect(() => {
-    const peerDocRef = doc(db, 'users', peerUser.id);
-    const unsubscribePeer = onSnapshot(peerDocRef, (snap) => {
-      if (snap.exists()) {
-        const peerData = snap.data();
-        setIsMeBlockedByPeer(peerData?.blockedUsers?.includes(currentUser.uid) || false);
-      }
-    });
-
-    return () => unsubscribePeer();
-  }, [peerUser.id, currentUser.uid]);
-
-  // 3. Stream messages, filtering out items prior to currentUser's clearedAt timestamp
-  useEffect(() => {
-    const messagesRef = collection(db, 'direct_messages', threadId, 'messages');
+    const messagesRef = collection(db, 'direct_messages', threadId, 'chats');
     const q = query(messagesRef, orderBy('createdAt', 'asc'));
 
-    const unsubscribeMessages = onSnapshot(q, (snapshot) => {
-      const allLoaded = snapshot.docs.map((d) => ({
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const loaded = snapshot.docs.map((d) => ({
         id: d.id,
         ...d.data(),
       }));
-
-      // Filter: Show only messages sent after this user's clear action
-      const visibleMessages = allLoaded.filter((msg) => {
-        const msgMillis = msg.createdMillis || 0;
-        return msgMillis >= myClearedTimestamp;
-      });
-
-      setMessages(visibleMessages);
-      setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
+      setMessages(loaded);
     });
 
-    return () => unsubscribeMessages();
-  }, [threadId, myClearedTimestamp]);
+    return () => unsubscribe();
+  }, [threadId]);
 
-  // Send Direct Message & update parent thread metadata
-  const handleSendDM = async () => {
+  // Send message
+  const handleSend = async () => {
     if (!inputText.trim()) return;
 
-    if (isPeerBlockedByMe) {
-      Alert.alert('Blocked', 'Unblock this user to send a message.');
-      return;
-    }
-    if (isMeBlockedByPeer) {
-      Alert.alert('Unavailable', 'You cannot message this user.');
-      return;
-    }
-
-    const nowMillis = Date.now();
-    const messagePayload = {
-      text: inputText.trim(),
-      senderId: currentUser.uid,
-      senderUsername: userProfile?.username || 'user',
-      isSystemMessage: false,
-      createdMillis: nowMillis,
-      createdAt: serverTimestamp(),
-    };
-
+    const textToSend = inputText;
     setInputText('');
 
     try {
-      // Add message
-      await addDoc(collection(db, 'direct_messages', threadId, 'messages'), messagePayload);
+      const messagesRef = collection(db, 'direct_messages', threadId, 'chats');
+      await addDoc(messagesRef, {
+        senderId: currentUser.uid,
+        senderName: userProfile?.fullName || currentUser.email,
+        text: textToSend.trim(),
+        createdAt: serverTimestamp(),
+      });
 
-      // Upsert conversation thread for the inbox list
+      const threadRef = doc(db, 'direct_threads', threadId);
       await setDoc(
-        doc(db, 'direct_threads', threadId),
+        threadRef,
         {
           participantIds: [currentUser.uid, peerUser.id],
-          participantsData: {
+          lastMessageText: textToSend.trim(),
+          lastMessageAt: serverTimestamp(),
+          participants: {
             [currentUser.uid]: {
-              fullName: userProfile?.fullName || currentUser.email,
+              name: userProfile?.fullName || currentUser.email,
               username: userProfile?.username || 'user',
             },
             [peerUser.id]: {
-              fullName: peerUser.fullName || peerUser.username,
-              username: peerUser.username,
+              name: peerUser.fullName || peerUser.name || 'Filmmaker',
+              username: peerUser.username || 'crew',
             },
           },
-          lastMessageText: messagePayload.text,
-          lastMessageTime: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          lastMessageAt: serverTimestamp(),
         },
         { merge: true }
       );
     } catch (error) {
-      Alert.alert('Error', error.message);
+      Alert.alert('Send Error', error.message);
     }
   };
 
-  // One-sided Clear Chat: Clears for the user and alerts the peer
-  const handleClearMyChat = () => {
+  // Option 1: Clear Chat (Wipes message docs, retains conversation in recents)
+  const handleClearChat = async () => {
+    setIsMenuVisible(false);
     Alert.alert(
       'Clear Chat',
-      'Clear your message history? The other participant will receive a notice that you cleared your history.',
+      'Are you sure you want to clear all messages in this conversation?',
       [
         { text: 'Cancel', style: 'cancel' },
         {
           text: 'Clear',
           style: 'destructive',
           onPress: async () => {
-            const clearMillis = Date.now();
             try {
-              // 1. Mark clear timestamp for current user in thread doc
-              await setDoc(
-                doc(db, 'direct_threads', threadId),
-                {
-                  clearedAt: {
-                    [currentUser.uid]: clearMillis,
-                  },
-                },
-                { merge: true }
-              );
+              const messagesRef = collection(db, 'direct_messages', threadId, 'chats');
+              const snap = await getDocs(messagesRef);
+              const deletions = snap.docs.map((d) => deleteDoc(d.ref));
+              await Promise.all(deletions);
 
-              // 2. Add system notice message visible to both parties
-              await addDoc(collection(db, 'direct_messages', threadId, 'messages'), {
-                text: `${userProfile?.fullName || `@${userProfile?.username}`} cleared their chat history.`,
-                senderId: 'SYSTEM',
-                isSystemMessage: true,
-                createdMillis: clearMillis,
-                createdAt: serverTimestamp(),
+              await updateDoc(doc(db, 'direct_threads', threadId), {
+                lastMessageText: 'Chat cleared',
+                lastMessageAt: serverTimestamp(),
               });
+              setMessages([]);
             } catch (err) {
-              Alert.alert('Clear Error', err.message);
+              Alert.alert('Error', err.message);
             }
           },
         },
@@ -188,128 +137,182 @@ export default function DirectMessageScreen({ route }) {
     );
   };
 
-  // Block / Unblock Toggle
-  const handleToggleBlock = async () => {
-    const userDocRef = doc(db, 'users', currentUser.uid);
-    try {
-      if (isPeerBlockedByMe) {
-        await updateDoc(userDocRef, {
-          blockedUsers: arrayRemove(peerUser.id),
-        });
-        Alert.alert('Unblocked', `@${peerUser.username} has been unblocked.`);
-      } else {
-        Alert.alert('Block User', `Block 1-on-1 messages from @${peerUser.username}?`, [
-          { text: 'Cancel', style: 'cancel' },
-          {
-            text: 'Block',
-            style: 'destructive',
-            onPress: async () => {
-              await updateDoc(userDocRef, {
-                blockedUsers: arrayUnion(peerUser.id),
-              });
-            },
+  // Option 2: Delete Chat (Wipes messages AND deletes the thread from recents list)
+  const handleDeleteChat = async () => {
+    setIsMenuVisible(false);
+    Alert.alert(
+      'Delete Chat',
+      'This will delete the messages and remove this thread from your recents list (connection remains).',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              const messagesRef = collection(db, 'direct_messages', threadId, 'chats');
+              const snap = await getDocs(messagesRef);
+              const deletions = snap.docs.map((d) => deleteDoc(d.ref));
+              await Promise.all(deletions);
+
+              await deleteDoc(doc(db, 'direct_threads', threadId));
+              navigation.goBack();
+            } catch (err) {
+              Alert.alert('Error', err.message);
+            }
           },
-        ]);
-      }
-    } catch (err) {
-      Alert.alert('Action Failed', err.message);
-    }
+        },
+      ]
+    );
   };
 
-  const renderMessageItem = ({ item }) => {
-    // System message banner (e.g., "[User] cleared their chat history")
-    if (item.isSystemMessage) {
-      return (
-        <View style={styles.systemBanner}>
-          <Text style={[styles.systemBannerText, { color: theme.textSecondary }]}>
-            ℹ️ {item.text}
-          </Text>
-        </View>
-      );
-    }
-
-    const isMine = item.senderId === currentUser.uid;
-    return (
-      <View style={[styles.bubbleWrapper, isMine ? styles.myWrapper : styles.peerWrapper]}>
-        <View style={[styles.bubble, { backgroundColor: isMine ? theme.primary : theme.card }]}>
-          <Text style={[styles.messageText, { color: '#ffffff' }]}>{item.text}</Text>
-        </View>
-      </View>
+  // Option 3: Block Filmmaker
+  const handleBlockUser = async () => {
+    setIsMenuVisible(false);
+    Alert.alert(
+      'Block Filmmaker',
+      `Are you sure you want to block ${peerUser?.fullName || 'this user'}?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Block',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              const userRef = doc(db, 'users', currentUser.uid);
+              await updateDoc(userRef, {
+                blockedUids: arrayUnion(peerUser.id),
+              });
+              Alert.alert('Blocked', 'User has been blocked.');
+              navigation.goBack();
+            } catch (err) {
+              Alert.alert('Error', err.message);
+            }
+          },
+        },
+      ]
     );
   };
 
   return (
     <KeyboardAvoidingView
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      style={[styles.container, { backgroundColor: theme.background }]}
+      style={[styles.container, { backgroundColor: theme?.background || '#0c0d0e' }]}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
     >
-      {/* Top Header */}
-      <View style={[styles.header, { borderColor: theme.border }]}>
-        <View>
-          <Text style={[styles.peerName, { color: theme.text }]}>{peerUser.fullName}</Text>
-          <Text style={[styles.peerUsername, { color: theme.textSecondary }]}>
-            @{peerUser.username}
-          </Text>
+      {/* Top Header with Back Arrow and 3 Dots on Far Right */}
+      <View style={[styles.header, { backgroundColor: theme?.card || '#181b1f', borderColor: theme?.cardBorder || '#242830' }]}>
+        <View style={styles.headerLeft}>
+          <BackButton />
+          <View style={styles.headerInfo}>
+            <Text style={[styles.peerName, { color: theme?.text || '#ffffff' }]}>
+              {peerUser?.fullName || peerUser?.name || 'Filmmaker'}
+            </Text>
+            <Text style={[styles.peerUsername, { color: theme?.textSecondary || '#9ca3af' }]}>
+              @{peerUser?.username || 'crew'}
+            </Text>
+          </View>
         </View>
 
-        <View style={styles.headerButtons}>
-          <TouchableOpacity style={styles.clearBtn} onPress={handleClearMyChat}>
-            <Text style={styles.headerBtnText}>Clear</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.blockBtn, isPeerBlockedByMe && styles.unblockBtn]}
-            onPress={handleToggleBlock}
-          >
-            <Text style={styles.blockBtnText}>
-              {isPeerBlockedByMe ? 'Unblock' : 'Block'}
-            </Text>
-          </TouchableOpacity>
-        </View>
+        {/* 3 Dots Option Menu Icon */}
+        <TouchableOpacity
+          style={[styles.menuBtn, { backgroundColor: theme?.surface || '#121417', borderColor: theme?.cardBorder || '#242830' }]}
+          onPress={() => setIsMenuVisible(true)}
+          activeOpacity={0.7}
+        >
+          <Text style={[styles.menuIcon, { color: theme?.text || '#ffffff' }]}>⋮</Text>
+        </TouchableOpacity>
       </View>
 
-      {/* Message Feed */}
+      {/* Messages Feed */}
       <FlatList
         ref={flatListRef}
         data={messages}
         keyExtractor={(item) => item.id}
-        renderItem={renderMessageItem}
-        contentContainerStyle={styles.feed}
+        onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
+        renderItem={({ item }) => {
+          const isMe = item.senderId === currentUser?.uid;
+          return (
+            <View style={[styles.messageRow, isMe ? styles.myRow : styles.peerRow]}>
+              <View
+                style={[
+                  styles.messageBubble,
+                  isMe
+                    ? { backgroundColor: theme?.primary || '#f5a623' }
+                    : { backgroundColor: theme?.card || '#181b1f', borderColor: theme?.cardBorder || '#242830', borderWidth: 1 },
+                ]}
+              >
+                <Text style={[styles.messageText, { color: isMe ? '#000000' : theme?.text || '#ffffff' }]}>
+                  {item.text}
+                </Text>
+              </View>
+            </View>
+          );
+        }}
+        contentContainerStyle={styles.messagesList}
         ListEmptyComponent={
-          <View style={styles.emptyFeed}>
-            <Text style={[styles.emptyFeedText, { color: theme.textSecondary }]}>
+          <View style={styles.emptyContainer}>
+            <Text style={[styles.emptyText, { color: theme?.textSecondary || '#9ca3af' }]}>
               No messages here yet.
             </Text>
           </View>
         }
       />
 
-      {/* Input Bar or Block Banner */}
-      {isPeerBlockedByMe ? (
-        <View style={[styles.blockedBanner, { backgroundColor: theme.surface }]}>
-          <Text style={styles.blockedText}>You have blocked this user.</Text>
-        </View>
-      ) : isMeBlockedByPeer ? (
-        <View style={[styles.blockedBanner, { backgroundColor: theme.surface }]}>
-          <Text style={styles.blockedText}>This user is currently unavailable.</Text>
-        </View>
-      ) : (
-        <View style={[styles.inputContainer, { backgroundColor: theme.surface, borderColor: theme.border }]}>
-          <TextInput
-            style={[styles.textInput, { color: theme.text }]}
-            placeholder="Send private message..."
-            placeholderTextColor={theme.textSecondary}
-            value={inputText}
-            onChangeText={setInputText}
-          />
-          <TouchableOpacity
-            style={[styles.sendBtn, { backgroundColor: theme.primary }]}
-            onPress={handleSendDM}
-          >
-            <Text style={styles.sendBtnText}>Send</Text>
-          </TouchableOpacity>
-        </View>
-      )}
+      {/* Multiline Input Bar */}
+      <View style={[styles.inputContainer, { backgroundColor: theme?.card || '#181b1f', borderColor: theme?.cardBorder || '#242830' }]}>
+        <TextInput
+          style={[styles.input, { color: theme?.text || '#ffffff' }]}
+          placeholder="Message..."
+          placeholderTextColor={theme?.textMuted || '#64748b'}
+          value={inputText}
+          onChangeText={setInputText}
+          multiline={true}
+          blurOnSubmit={false}
+          returnKeyType="default"
+          textAlignVertical="center"
+        />
+
+        <TouchableOpacity
+          style={[
+            styles.sendButton,
+            { backgroundColor: inputText.trim() ? (theme?.primary || '#f5a623') : '#33373d' },
+          ]}
+          onPress={handleSend}
+          disabled={!inputText.trim()}
+          activeOpacity={0.8}
+        >
+          <Text style={[styles.sendButtonText, { color: inputText.trim() ? '#000000' : '#888888' }]}>
+            Send
+          </Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* 3-Dots Action Dropdown Modal */}
+      <Modal visible={isMenuVisible} animationType="fade" transparent onRequestClose={() => setIsMenuVisible(false)}>
+        <Pressable style={styles.menuBackdrop} onPress={() => setIsMenuVisible(false)}>
+          <View style={[styles.dropdownMenu, { backgroundColor: theme?.card || '#181b1f', borderColor: theme?.cardBorder || '#242830' }]}>
+            <TouchableOpacity style={styles.menuOption} onPress={handleClearChat}>
+              <Text style={{ fontSize: 16, marginRight: 10 }}>🧹</Text>
+              <Text style={[styles.menuOptionText, { color: theme?.text || '#ffffff' }]}>Clear Chat</Text>
+            </TouchableOpacity>
+
+            <View style={[styles.menuDivider, { backgroundColor: theme?.cardBorder || '#242830' }]} />
+
+            <TouchableOpacity style={styles.menuOption} onPress={handleDeleteChat}>
+              <Text style={{ fontSize: 16, marginRight: 10 }}>🗑</Text>
+              <Text style={[styles.menuOptionText, { color: theme?.text || '#ffffff' }]}>Delete Chat</Text>
+            </TouchableOpacity>
+
+            <View style={[styles.menuDivider, { backgroundColor: theme?.cardBorder || '#242830' }]} />
+
+            <TouchableOpacity style={styles.menuOption} onPress={handleBlockUser}>
+              <Text style={{ fontSize: 16, marginRight: 10 }}>🚫</Text>
+              <Text style={[styles.menuOptionText, { color: '#f87171' }]}>Block Filmmaker</Text>
+            </TouchableOpacity>
+          </View>
+        </Pressable>
+      </Modal>
     </KeyboardAvoidingView>
   );
 }
@@ -317,35 +320,130 @@ export default function DirectMessageScreen({ route }) {
 const styles = StyleSheet.create({
   container: { flex: 1 },
   header: {
+    paddingTop: 44,
+    paddingHorizontal: 16,
+    paddingBottom: 12,
+    borderBottomWidth: 1,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+  },
+  headerLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  headerInfo: {
+    flex: 1,
+  },
+  peerName: {
+    fontSize: 16,
+    fontWeight: '900',
+  },
+  peerUsername: {
+    fontSize: 12,
+    marginTop: 2,
+  },
+  menuBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 8,
+    borderWidth: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  menuIcon: {
+    fontSize: 20,
+    fontWeight: '900',
+  },
+  messagesList: {
+    padding: 16,
+    paddingBottom: 24,
+  },
+  emptyContainer: {
+    marginTop: 180,
+    alignItems: 'center',
+  },
+  emptyText: {
+    fontSize: 13,
+    fontStyle: 'italic',
+  },
+  messageRow: {
+    flexDirection: 'row',
+    marginVertical: 4,
+  },
+  myRow: {
+    justifyContent: 'flex-end',
+  },
+  peerRow: {
+    justifyContent: 'flex-start',
+  },
+  messageBubble: {
+    maxWidth: '80%',
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+    borderRadius: 12,
+  },
+  messageText: {
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  inputContainer: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    borderTopWidth: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    minHeight: 56,
+  },
+  input: {
+    flex: 1,
+    fontSize: 14,
+    minHeight: 38,
+    maxHeight: 120,
+    paddingHorizontal: 10,
+    paddingTop: 8,
+    paddingBottom: 8,
+  },
+  sendButton: {
     paddingHorizontal: 16,
     paddingVertical: 10,
-    borderBottomWidth: 1,
+    borderRadius: 8,
+    marginLeft: 8,
+    alignSelf: 'flex-end',
+    marginBottom: 2,
   },
-  peerName: { fontSize: 15, fontWeight: '800' },
-  peerUsername: { fontSize: 12 },
-  headerButtons: { flexDirection: 'row', gap: 8 },
-  clearBtn: { backgroundColor: '#333', paddingVertical: 5, paddingHorizontal: 10, borderRadius: 6 },
-  headerBtnText: { color: '#ccc', fontSize: 12, fontWeight: '600' },
-  blockBtn: { backgroundColor: '#b00020', paddingVertical: 5, paddingHorizontal: 10, borderRadius: 6 },
-  unblockBtn: { backgroundColor: '#4caf50' },
-  blockBtnText: { color: '#ffffff', fontSize: 12, fontWeight: 'bold' },
-  feed: { padding: 14, paddingBottom: 20 },
-  bubbleWrapper: { marginVertical: 4, maxWidth: '80%' },
-  myWrapper: { alignSelf: 'flex-end' },
-  peerWrapper: { alignSelf: 'flex-start' },
-  bubble: { paddingHorizontal: 14, paddingVertical: 10, borderRadius: 14 },
-  messageText: { fontSize: 14, lineHeight: 19 },
-  systemBanner: { alignSelf: 'center', marginVertical: 10, paddingHorizontal: 12, paddingVertical: 4 },
-  systemBannerText: { fontSize: 11, fontStyle: 'italic' },
-  emptyFeed: { alignItems: 'center', marginTop: 80, paddingHorizontal: 40 },
-  emptyFeedText: { textAlign: 'center', fontSize: 13, fontStyle: 'italic' },
-  blockedBanner: { padding: 16, alignItems: 'center' },
-  blockedText: { color: '#e50914', fontWeight: 'bold', fontSize: 13 },
-  inputContainer: { flexDirection: 'row', alignItems: 'center', padding: 10, borderTopWidth: 1 },
-  textInput: { flex: 1, fontSize: 14, paddingHorizontal: 12, paddingVertical: 8 },
-  sendBtn: { paddingHorizontal: 16, paddingVertical: 10, borderRadius: 8, marginLeft: 8 },
-  sendBtnText: { color: '#ffffff', fontWeight: 'bold', fontSize: 13 },
+  sendButtonText: {
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  menuBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'flex-start',
+    alignItems: 'flex-end',
+    paddingTop: 54,
+    paddingRight: 16,
+  },
+  dropdownMenu: {
+    width: 190,
+    borderRadius: 10,
+    borderWidth: 1,
+    paddingVertical: 6,
+    elevation: 8,
+  },
+  menuOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  menuOptionText: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  menuDivider: {
+    height: 1,
+    marginVertical: 2,
+  },
 });
