@@ -1,27 +1,36 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, Alert, KeyboardAvoidingView, Platform, ScrollView } from 'react-native';
+import {
+  View,
+  Text,
+  StyleSheet,
+  Image,
+  TouchableOpacity,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
+  Alert,
+} from 'react-native';
+import { signInWithEmailAndPassword } from 'firebase/auth';
+import { auth } from '../../../firebaseConfig';
+import { useTheme } from '../../context/ThemeContext';
 import CustomInput from '../../components/CustomInput';
 import CustomButton from '../../components/CustomButton';
-import { useAuth } from '../../context/AuthContext';
-import { useTheme } from '../../context/ThemeContext';
 
 export default function LoginScreen({ navigation }) {
-  const { login } = useAuth();
   const { theme } = useTheme();
-
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
 
   const handleLogin = async () => {
     if (!email.trim() || !password) {
-      Alert.alert('Missing Info', 'Please enter your email and password.');
+      Alert.alert('Required', 'Please enter your email and password.');
       return;
     }
 
     setLoading(true);
     try {
-      await login(email.trim(), password);
+      await signInWithEmailAndPassword(auth, email.trim(), password);
     } catch (error) {
       Alert.alert('Login Failed', error.message);
     } finally {
@@ -31,22 +40,33 @@ export default function LoginScreen({ navigation }) {
 
   return (
     <KeyboardAvoidingView
+      style={[styles.container, { backgroundColor: theme?.background || '#0c0d0e' }]}
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      style={[styles.container, { backgroundColor: theme?.background || '#121212' }]}
     >
-      <ScrollView contentContainerStyle={styles.content}>
-        <Text style={[styles.title, { color: theme?.text || '#ffffff' }]}>FILMROOM</Text>
-        <Text style={[styles.subtitle, { color: theme?.textSecondary || '#888888' }]}>
-          Collaborative studio for filmmakers
-        </Text>
+      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+        {/* Brand Logo Header */}
+        <View style={styles.logoContainer}>
+          <Image
+            source={require('../../../assets/logo.png')}
+            style={styles.logoImage}
+            resizeMode="contain"
+          />
+          <Text style={[styles.brandTitle, { color: theme?.text || '#ffffff' }]}>
+            FILM<Text style={{ color: theme?.primary || '#f5a623' }}>ROOM</Text>
+          </Text>
+          <Text style={[styles.brandSubtitle, { color: theme?.textSecondary || '#9ca3af' }]}>
+            Cinema Production Management & Talent Network
+          </Text>
+        </View>
 
+        {/* Input Fields */}
         <CustomInput
-          label="Email"
+          label="Email Address"
           placeholder="director@studio.com"
           value={email}
           onChangeText={setEmail}
-          keyboardType="email-address"
           autoCapitalize="none"
+          keyboardType="email-address"
         />
 
         <CustomInput
@@ -57,25 +77,32 @@ export default function LoginScreen({ navigation }) {
           secureTextEntry
         />
 
+        <TouchableOpacity
+          style={styles.forgotBtn}
+          onPress={() => navigation.navigate('ForgotPassword')}
+        >
+          <Text style={[styles.forgotText, { color: theme?.primary || '#f5a623' }]}>
+            Forgot password?
+          </Text>
+        </TouchableOpacity>
+
         <CustomButton
-          title="LOG IN"
+          title="ENTER STUDIO"
           onPress={handleLogin}
           loading={loading}
-          style={{ marginTop: 10, marginBottom: 12 }}
+          style={{ marginTop: 10 }}
         />
 
-        <CustomButton
-          title="Forgot Password?"
-          variant="outline"
-          onPress={() => navigation.navigate('ForgotPassword')}
-          style={{ marginBottom: 12 }}
-        />
-
-        <CustomButton
-          title="Create New Account"
-          variant="secondary"
-          onPress={() => navigation.navigate('Signup')}
-        />
+        <View style={styles.footerRow}>
+          <Text style={{ color: theme?.textSecondary || '#9ca3af', fontSize: 13 }}>
+            New to FilmRoom?{' '}
+          </Text>
+          <TouchableOpacity onPress={() => navigation.navigate('Signup')}>
+            <Text style={{ color: theme?.primary || '#f5a623', fontWeight: 'bold', fontSize: 13 }}>
+              Create Account
+            </Text>
+          </TouchableOpacity>
+        </View>
       </ScrollView>
     </KeyboardAvoidingView>
   );
@@ -83,7 +110,44 @@ export default function LoginScreen({ navigation }) {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  content: { flexGrow: 1, justifyContent: 'center', padding: 24 },
-  title: { fontSize: 28, fontWeight: '900', letterSpacing: 2, textAlign: 'center' },
-  subtitle: { fontSize: 13, textAlign: 'center', marginTop: 4, marginBottom: 30 },
+  content: {
+    padding: 24,
+    paddingTop: 60,
+    paddingBottom: 40,
+    justifyContent: 'center',
+  },
+  logoContainer: {
+    alignItems: 'center',
+    marginBottom: 32,
+  },
+  logoImage: {
+    width: 110,
+    height: 110,
+    marginBottom: 12,
+  },
+  brandTitle: {
+    fontSize: 28,
+    fontWeight: '900',
+    letterSpacing: 2,
+  },
+  brandSubtitle: {
+    fontSize: 12,
+    textAlign: 'center',
+    marginTop: 6,
+    letterSpacing: 0.3,
+  },
+  forgotBtn: {
+    alignSelf: 'flex-end',
+    marginBottom: 16,
+    marginTop: -4,
+  },
+  forgotText: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  footerRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    marginTop: 24,
+  },
 });
