@@ -21,6 +21,7 @@ export default function LoginScreen({ navigation }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
+  const [imageError, setImageError] = useState(false);
 
   const handleLogin = async () => {
     if (!email.trim() || !password) {
@@ -44,13 +45,22 @@ export default function LoginScreen({ navigation }) {
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
     >
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-        {/* Brand Logo Header */}
+        {/* Brand Header */}
         <View style={styles.logoContainer}>
-          <Image
-            source={require('../../../assets/logo.png')}
-            style={styles.logoImage}
-            resizeMode="contain"
-          />
+          {!imageError ? (
+            <Image
+              // Uses icon.png which exists in assets/ by default
+              source={require('../../../assets/icon.png')}
+              style={styles.logoImage}
+              resizeMode="contain"
+              onError={() => setImageError(true)}
+            />
+          ) : (
+            <View style={[styles.fallbackIconBadge, { backgroundColor: '#181b1f', borderColor: '#242830' }]}>
+              <Text style={styles.fallbackIconText}>🎬</Text>
+            </View>
+          )}
+
           <Text style={[styles.brandTitle, { color: theme?.text || '#ffffff' }]}>
             FILM<Text style={{ color: theme?.primary || '#f5a623' }}>ROOM</Text>
           </Text>
@@ -59,7 +69,7 @@ export default function LoginScreen({ navigation }) {
           </Text>
         </View>
 
-        {/* Input Fields */}
+        {/* Form Inputs */}
         <CustomInput
           label="Email Address"
           placeholder="director@studio.com"
@@ -109,7 +119,9 @@ export default function LoginScreen({ navigation }) {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1 },
+  container: {
+    flex: 1,
+  },
   content: {
     padding: 24,
     paddingTop: 60,
@@ -121,9 +133,22 @@ const styles = StyleSheet.create({
     marginBottom: 32,
   },
   logoImage: {
-    width: 110,
-    height: 110,
-    marginBottom: 12,
+    width: 90,
+    height: 90,
+    borderRadius: 16,
+    marginBottom: 14,
+  },
+  fallbackIconBadge: {
+    width: 80,
+    height: 80,
+    borderRadius: 16,
+    borderWidth: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 14,
+  },
+  fallbackIconText: {
+    fontSize: 40,
   },
   brandTitle: {
     fontSize: 28,

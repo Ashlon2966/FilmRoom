@@ -1,4 +1,4 @@
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 import * as DocumentPicker from 'expo-document-picker';
 import { doc, getDoc, updateDoc } from 'firebase/firestore';
@@ -6,12 +6,15 @@ import { db } from '../../firebaseConfig';
 import { Alert } from 'react-native';
 
 /**
- * Scans the local document directory and computes the next incremental backup filename.
+ * Scans the document directory and computes the next incremental backup filename.
  * Produces: backup1.json, backup2.json, backup3.json, etc.
  */
 const getNextBackupFilename = async () => {
   try {
-    const files = await FileSystem.readDirectoryAsync(FileSystem.documentDirectory);
+    const dir = FileSystem.documentDirectory;
+    if (!dir) return 'backup1.json';
+
+    const files = await FileSystem.readDirectoryAsync(dir);
     let highestIndex = 0;
 
     const backupRegex = /^backup(\d+)\.json$/i;
@@ -20,26 +23,25 @@ const getNextBackupFilename = async () => {
       const match = file.match(backupRegex);
       if (match && match[1]) {
         const num = parseInt(match[1], 10);
-        if (num > highestIndex) {
+        if (!isNaN(num) && num > highestIndex) {
           highestIndex = num;
         }
       }
     });
 
-    const nextIndex = highestIndex + 1;
-    return `backup${nextIndex}.json`;
+    return `backup${highestIndex + 1}.json`;
   } catch (error) {
-    console.warn('Error reading directory for sequential backup, falling back to backup1.json:', error);
+    console.warn('Directory read fallback to backup1.json:', error);
     return 'backup1.json';
   }
 };
 
 /**
- * Exports user profile data and writes sequentially as backup1.json, backup2.json...
+ * Exports user profile data sequentially to Google Drive or local storage.
  */
 export const exportUserDataToDrive = async (userId) => {
   if (!userId) {
-    Alert.alert('Backup Error', 'User ID is missing. Please make sure you are logged in.');
+    Alert.alert('Backup Error', 'User ID is missing. Please sign in first.');
     return;
   }
 
@@ -65,8 +67,9 @@ export const exportUserDataToDrive = async (userId) => {
 
     const jsonString = JSON.stringify(backupPayload, null, 2);
 
+    // Using string literal 'utf8' to avoid undefined EncodingType errors
     await FileSystem.writeAsStringAsync(destinationUri, jsonString, {
-      encoding: FileSystem.EncodingType.UTF8,
+      encoding: 'utf8',
     });
 
     const isShareAvailable = await Sharing.isAvailableAsync();
@@ -89,7 +92,7 @@ export const exportUserDataToDrive = async (userId) => {
  */
 export const importUserDataFromFile = async (userId, onSuccess) => {
   if (!userId) {
-    Alert.alert('Restore Error', 'User ID is missing. Please log in first.');
+    Alert.alert('Restore Error', 'User ID is missing. Please sign in first.');
     return;
   }
 
@@ -104,14 +107,16 @@ export const importUserDataFromFile = async (userId, onSuccess) => {
     }
 
     const file = res.assets[0];
+
+    // Using string literal 'utf8'
     const fileContent = await FileSystem.readAsStringAsync(file.uri, {
-      encoding: FileSystem.EncodingType.UTF8,
+      encoding: 'utf8',
     });
 
     const parsed = JSON.parse(fileContent);
 
     if (!parsed.data) {
-      throw new Error('Unrecognized backup structure. Missing "data" payload.');
+      throw new Error('Unrecognized backup format: missing "data" key.');
     }
 
     const restorePayload = {
@@ -129,10 +134,10 @@ export const importUserDataFromFile = async (userId, onSuccess) => {
     };
 
     await updateDoc(doc(db, 'users', userId), restorePayload);
-    Alert.alert('Restore Complete', `Restored from ${file.name} successfully.`);
+    Alert.alert('Restore Complete', `Restored data from ${file.name} successfully.`);
     if (onSuccess) onSuccess();
   } catch (err) {
     console.error('Backup import error:', err);
-    Alert.alert('Import Failed', err.message || 'Could not parse or restore backup file.');
+    Alert.alert('Import Failed', err.message || 'Could not restore backup file.');
   }
 };
