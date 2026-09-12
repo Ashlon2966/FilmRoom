@@ -1,5 +1,5 @@
 import * as XLSX from 'xlsx';
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 import { Alert } from 'react-native';
 
@@ -13,7 +13,7 @@ export const exportTakesToXLSX = async (fileName, dataArray) => {
     const fileUri = `${FileSystem.documentDirectory}${fileName}_${Date.now()}.xlsx`;
 
     await FileSystem.writeAsStringAsync(fileUri, base64Content, {
-      encoding: FileSystem.EncodingType.Base64,
+      encoding: 'base64',
     });
 
     if (await Sharing.isAvailableAsync()) {

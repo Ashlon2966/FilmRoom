@@ -10,28 +10,23 @@ import {
   Pressable,
 } from 'react-native';
 import { useTheme } from '../context/ThemeContext';
-
-const DEPARTMENTS = [
-  'All',
-  'Director',
-  'Cinematographer',
-  'Camera Operator',
-  'Scriptwriter',
-  'Producer',
-  'Sound Designer',
-  'Editor',
-  'Actor',
-  'Gaffer',
-  'Grip',
-  'Production Assistant',
-];
+import {
+  ROLE_CATEGORIES,
+  INDUSTRY_ROLES,
+  UNION_STATUSES,
+  AVAILABILITY_STATUS,
+  getRolesByCategory,
+} from '../config/rolesConfig';
 
 export default function FilterModal({ visible, currentFilters, onClose, onApply }) {
   const { theme } = useTheme();
 
   // Local state initialized with current active filters
   const [status, setStatus] = useState('ALL');
+  const [category, setCategory] = useState('ALL');
   const [role, setRole] = useState('All');
+  const [representation, setRepresentation] = useState('ALL');
+  const [unionStatus, setUnionStatus] = useState('All');
   const [region, setRegion] = useState('');
   const [skillKeyword, setSkillKeyword] = useState('');
 
@@ -39,17 +34,35 @@ export default function FilterModal({ visible, currentFilters, onClose, onApply 
   useEffect(() => {
     if (visible && currentFilters) {
       setStatus(currentFilters.status || 'ALL');
+      setCategory(currentFilters.category || 'ALL');
       setRole(currentFilters.role || 'All');
+      setRepresentation(currentFilters.representation || 'ALL');
+      setUnionStatus(currentFilters.unionStatus || 'All');
       setRegion(currentFilters.region || '');
       setSkillKeyword(currentFilters.skillKeyword || '');
     }
   }, [visible, currentFilters]);
 
+  // Handle Category selection change (resets role to 'All' if previous role does not match category)
+  const handleCategorySelect = (catKey) => {
+    setCategory(catKey);
+    setRole('All');
+  };
+
+  // Get available roles for the current category selection
+  const rolesList =
+    category === 'ALL'
+      ? ['All', ...INDUSTRY_ROLES.map((r) => r.name)]
+      : ['All', ...getRolesByCategory(category).map((r) => r.name)];
+
   // Apply button handler
   const handleApply = () => {
     onApply({
       status,
+      category,
       role,
+      representation,
+      unionStatus,
       region: region.trim(),
       skillKeyword: skillKeyword.trim(),
     });
@@ -64,12 +77,18 @@ export default function FilterModal({ visible, currentFilters, onClose, onApply 
   // Clear Filter: Reset all criteria back to default
   const handleClear = () => {
     setStatus('ALL');
+    setCategory('ALL');
     setRole('All');
+    setRepresentation('ALL');
+    setUnionStatus('All');
     setRegion('');
     setSkillKeyword('');
     onApply({
       status: 'ALL',
+      category: 'ALL',
       role: 'All',
+      representation: 'ALL',
+      unionStatus: 'All',
       region: '',
       skillKeyword: '',
     });
@@ -96,7 +115,7 @@ export default function FilterModal({ visible, currentFilters, onClose, onApply 
                 FILTER TALENT DIRECTORY
               </Text>
               <Text style={[styles.subTitle, { color: theme?.textSecondary || '#9ca3af' }]}>
-                Narrow creatives by availability, role, and location
+                Multi-variable deterministic professional filter
               </Text>
             </View>
             <TouchableOpacity onPress={onClose} style={styles.closeBtn}>
@@ -104,16 +123,18 @@ export default function FilterModal({ visible, currentFilters, onClose, onApply 
             </TouchableOpacity>
           </View>
 
-          <ScrollView showsVerticalScrollIndicator={true} contentContainerStyle={{ paddingBottom: 20 }}>
-            {/* Availability Status */}
+          <ScrollView showsVerticalScrollIndicator={true} contentContainerStyle={{ paddingBottom: 24 }}>
+            {/* 1. Availability Status */}
             <Text style={[styles.label, { color: theme?.textSecondary || '#9ca3af' }]}>
               AVAILABILITY STATUS
             </Text>
             <View style={styles.btnRow}>
               {[
                 { id: 'ALL', label: 'All Creatives' },
-                { id: 'AVAILABLE', label: '🟢 Available Only' },
-                { id: 'BUSY', label: '⚪ Busy' },
+                { id: AVAILABILITY_STATUS.AVAILABLE, label: '🟢 Available for Hire' },
+                { id: AVAILABILITY_STATUS.BUSY, label: '⚪ On Production (Busy)' },
+                { id: AVAILABILITY_STATUS.AVAILABLE_FROM, label: '🟡 Available Soon' },
+                { id: AVAILABILITY_STATUS.UNAVAILABLE, label: '🔴 Unavailable' },
               ].map((item) => {
                 const isSelected = status === item.id;
                 return (
@@ -123,7 +144,7 @@ export default function FilterModal({ visible, currentFilters, onClose, onApply 
                       styles.filterChip,
                       {
                         backgroundColor: isSelected ? (theme?.primary || '#f5a623') : (theme?.surface || '#121417'),
-                        borderColor: theme?.cardBorder || '#242830',
+                        borderColor: isSelected ? (theme?.primary || '#f5a623') : (theme?.cardBorder || '#242830'),
                       },
                     ]}
                     onPress={() => setStatus(item.id)}
@@ -141,25 +162,29 @@ export default function FilterModal({ visible, currentFilters, onClose, onApply 
               })}
             </View>
 
-            {/* Department / Primary Role */}
+            {/* 2. Industry Pillar / Category */}
             <Text style={[styles.label, { color: theme?.textSecondary || '#9ca3af', marginTop: 16 }]}>
-              PRIMARY DEPARTMENT / ROLE
+              INDUSTRY PILLAR
             </Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginVertical: 6 }}>
-              {DEPARTMENTS.map((dept) => {
-                const isSelected = role === dept;
+            <View style={styles.btnRow}>
+              {[
+                { id: 'ALL', label: 'All Pillars' },
+                { id: ROLE_CATEGORIES.TALENT, label: 'Talent & Crafts' },
+                { id: ROLE_CATEGORIES.PRODUCTION, label: 'Production & Hiring' },
+                { id: ROLE_CATEGORIES.REPRESENTATION, label: 'Representation' },
+              ].map((item) => {
+                const isSelected = category === item.id;
                 return (
                   <TouchableOpacity
-                    key={dept}
+                    key={item.id}
                     style={[
                       styles.filterChip,
                       {
                         backgroundColor: isSelected ? (theme?.primary || '#f5a623') : (theme?.surface || '#121417'),
-                        borderColor: theme?.cardBorder || '#242830',
-                        marginRight: 6,
+                        borderColor: isSelected ? (theme?.primary || '#f5a623') : (theme?.cardBorder || '#242830'),
                       },
                     ]}
-                    onPress={() => setRole(dept)}
+                    onPress={() => handleCategorySelect(item.id)}
                   >
                     <Text
                       style={[
@@ -167,16 +192,118 @@ export default function FilterModal({ visible, currentFilters, onClose, onApply 
                         { color: isSelected ? '#000000' : (theme?.text || '#ffffff'), fontWeight: isSelected ? '800' : '500' },
                       ]}
                     >
-                      {dept}
+                      {item.label}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+
+            {/* 3. Primary Role */}
+            <Text style={[styles.label, { color: theme?.textSecondary || '#9ca3af', marginTop: 16 }]}>
+              PRIMARY ROLE ({rolesList.length - 1} AVAILABLE)
+            </Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginVertical: 4 }}>
+              {rolesList.map((rName) => {
+                const isSelected = role === rName;
+                return (
+                  <TouchableOpacity
+                    key={rName}
+                    style={[
+                      styles.filterChip,
+                      {
+                        backgroundColor: isSelected ? (theme?.primary || '#f5a623') : (theme?.surface || '#121417'),
+                        borderColor: isSelected ? (theme?.primary || '#f5a623') : (theme?.cardBorder || '#242830'),
+                        marginRight: 6,
+                      },
+                    ]}
+                    onPress={() => setRole(rName)}
+                  >
+                    <Text
+                      style={[
+                        styles.chipText,
+                        { color: isSelected ? '#000000' : (theme?.text || '#ffffff'), fontWeight: isSelected ? '800' : '500' },
+                      ]}
+                    >
+                      {rName}
                     </Text>
                   </TouchableOpacity>
                 );
               })}
             </ScrollView>
 
-            {/* Region / City */}
+            {/* 4. Representation Gateway */}
             <Text style={[styles.label, { color: theme?.textSecondary || '#9ca3af', marginTop: 16 }]}>
-              REGION / CITY / LOCATION
+              REPRESENTATION STATUS
+            </Text>
+            <View style={styles.btnRow}>
+              {[
+                { id: 'ALL', label: 'All' },
+                { id: 'REPRESENTED', label: '🏛 Agency / Managed' },
+                { id: 'SELF', label: '👤 Self-Represented' },
+              ].map((item) => {
+                const isSelected = representation === item.id;
+                return (
+                  <TouchableOpacity
+                    key={item.id}
+                    style={[
+                      styles.filterChip,
+                      {
+                        backgroundColor: isSelected ? (theme?.primary || '#f5a623') : (theme?.surface || '#121417'),
+                        borderColor: isSelected ? (theme?.primary || '#f5a623') : (theme?.cardBorder || '#242830'),
+                      },
+                    ]}
+                    onPress={() => setRepresentation(item.id)}
+                  >
+                    <Text
+                      style={[
+                        styles.chipText,
+                        { color: isSelected ? '#000000' : (theme?.text || '#ffffff'), fontWeight: isSelected ? '800' : '500' },
+                      ]}
+                    >
+                      {item.label}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+
+            {/* 5. Union Status */}
+            <Text style={[styles.label, { color: theme?.textSecondary || '#9ca3af', marginTop: 16 }]}>
+              UNION AFFILIATION
+            </Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginVertical: 4 }}>
+              {['All', ...UNION_STATUSES].map((u) => {
+                const isSelected = unionStatus === u;
+                return (
+                  <TouchableOpacity
+                    key={u}
+                    style={[
+                      styles.filterChip,
+                      {
+                        backgroundColor: isSelected ? (theme?.primary || '#f5a623') : (theme?.surface || '#121417'),
+                        borderColor: isSelected ? (theme?.primary || '#f5a623') : (theme?.cardBorder || '#242830'),
+                        marginRight: 6,
+                      },
+                    ]}
+                    onPress={() => setUnionStatus(u)}
+                  >
+                    <Text
+                      style={[
+                        styles.chipText,
+                        { color: isSelected ? '#000000' : (theme?.text || '#ffffff'), fontWeight: isSelected ? '800' : '500' },
+                      ]}
+                    >
+                      {u}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+
+            {/* 6. Region / City */}
+            <Text style={[styles.label, { color: theme?.textSecondary || '#9ca3af', marginTop: 16 }]}>
+              PRIMARY PRODUCTION REGION / CITY
             </Text>
             <TextInput
               style={[
@@ -193,9 +320,9 @@ export default function FilterModal({ visible, currentFilters, onClose, onApply 
               onChangeText={setRegion}
             />
 
-            {/* Gear or Skill Keywords */}
+            {/* 7. Skills, Equipment, or Language Keyword */}
             <Text style={[styles.label, { color: theme?.textSecondary || '#9ca3af', marginTop: 16 }]}>
-              GEAR OR SKILLS KEYWORD
+              SKILLS, GEAR, OR LANGUAGE KEYWORD
             </Text>
             <TextInput
               style={[
@@ -206,7 +333,7 @@ export default function FilterModal({ visible, currentFilters, onClose, onApply 
                   borderColor: theme?.cardBorder || '#242830',
                 },
               ]}
-              placeholder="e.g. Alexa Mini LF, Anamorphic, Dolby Atmos..."
+              placeholder="e.g. Alexa Mini LF, Spanish, French, Stunts, Avid..."
               placeholderTextColor={theme?.textMuted || '#64748b'}
               value={skillKeyword}
               onChangeText={setSkillKeyword}
@@ -253,7 +380,7 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
   },
   card: {
-    height: '84%',
+    height: '88%',
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     borderWidth: 1,
@@ -294,12 +421,12 @@ const styles = StyleSheet.create({
   },
   filterChip: {
     paddingHorizontal: 12,
-    paddingVertical: 8,
+    paddingVertical: 7,
     borderRadius: 6,
     borderWidth: 1,
   },
   chipText: {
-    fontSize: 12,
+    fontSize: 11,
   },
   input: {
     borderRadius: 6,

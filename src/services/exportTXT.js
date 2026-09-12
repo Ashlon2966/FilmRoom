@@ -1,4 +1,4 @@
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 import { Alert } from 'react-native';
 
@@ -6,7 +6,7 @@ export const exportToTXT = async (fileName, textContent) => {
   try {
     const fileUri = `${FileSystem.documentDirectory}${fileName}_${Date.now()}.txt`;
     await FileSystem.writeAsStringAsync(fileUri, textContent, {
-      encoding: FileSystem.EncodingType.UTF8,
+      encoding: 'utf8',
     });
 
     if (await Sharing.isAvailableAsync()) {

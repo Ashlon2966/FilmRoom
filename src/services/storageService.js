@@ -1,4 +1,4 @@
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 
 /**
  * Maximum document size limit for Cloud Firestore (1 MB).
@@ -86,7 +86,6 @@ export const getFileMetadata = async (localUri) => {
  */
 export const saveBase64ToLocalFile = async (fileName, base64Data) => {
   try {
-    // Strip out data URI prefix if present (e.g., "data:application/pdf;base64,")
     const cleanBase64 = base64Data.includes(',') 
       ? base64Data.split(',')[1] 
       : base64Data;

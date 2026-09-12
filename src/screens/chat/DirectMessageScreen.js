@@ -11,6 +11,7 @@ import {
   Alert,
   Modal,
   Pressable,
+  ActivityIndicator,
 } from 'react-native';
 import {
   collection,
@@ -30,6 +31,7 @@ import { db } from '../../../firebaseConfig';
 import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
 import BackButton from '../../components/BackButton';
+import { isConnectionAccepted } from '../../services/connectionService';
 
 export default function DirectMessageScreen({ route, navigation }) {
   const { peerUser } = route.params || {};
@@ -39,12 +41,41 @@ export default function DirectMessageScreen({ route, navigation }) {
   const [messages, setMessages] = useState([]);
   const [inputText, setInputText] = useState('');
   const [isMenuVisible, setIsMenuVisible] = useState(false);
+  const [isSending, setIsSending] = useState(false);
+  const [isConnected, setIsConnected] = useState(true);
+  const [checkingConnection, setCheckingConnection] = useState(true);
   const flatListRef = useRef(null);
 
+  const peerId = peerUser?.id || peerUser?.uid;
   const threadId =
-    currentUser?.uid < peerUser?.id
-      ? `${currentUser?.uid}_${peerUser?.id}`
-      : `${peerUser?.id}_${currentUser?.uid}`;
+    currentUser?.uid && peerId
+      ? currentUser.uid < peerId
+        ? `${currentUser.uid}_${peerId}`
+        : `${peerId}_${currentUser.uid}`
+      : null;
+
+  // Blocked status check
+  const isBlockedByMe = (userProfile?.blockedUids || []).includes(peerId);
+
+  // Check connection status
+  useEffect(() => {
+    let isMounted = true;
+    const verifyConnection = async () => {
+      if (currentUser?.uid && peerId) {
+        const accepted = await isConnectionAccepted(currentUser.uid, peerId);
+        if (isMounted) {
+          setIsConnected(accepted);
+          setCheckingConnection(false);
+        }
+      } else {
+        if (isMounted) setCheckingConnection(false);
+      }
+    };
+    verifyConnection();
+    return () => {
+      isMounted = false;
+    };
+  }, [currentUser?.uid, peerId]);
 
   // Stream messages from Firestore
   useEffect(() => {
@@ -53,30 +84,37 @@ export default function DirectMessageScreen({ route, navigation }) {
     const messagesRef = collection(db, 'direct_messages', threadId, 'chats');
     const q = query(messagesRef, orderBy('createdAt', 'asc'));
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const loaded = snapshot.docs.map((d) => ({
-        id: d.id,
-        ...d.data(),
-      }));
-      setMessages(loaded);
-    });
+    const unsubscribe = onSnapshot(
+      q,
+      (snapshot) => {
+        const loaded = snapshot.docs.map((d) => ({
+          id: d.id,
+          ...d.data(),
+        }));
+        setMessages(loaded);
+      },
+      (error) => {
+        console.error('Messages stream error:', error);
+      }
+    );
 
     return () => unsubscribe();
   }, [threadId]);
 
   // Send message
   const handleSend = async () => {
-    if (!inputText.trim()) return;
+    if (!inputText.trim() || !threadId || isBlockedByMe || isSending || !isConnected) return;
 
-    const textToSend = inputText;
+    const textToSend = inputText.trim();
     setInputText('');
+    setIsSending(true);
 
     try {
       const messagesRef = collection(db, 'direct_messages', threadId, 'chats');
       await addDoc(messagesRef, {
         senderId: currentUser.uid,
         senderName: userProfile?.fullName || currentUser.email,
-        text: textToSend.trim(),
+        text: textToSend,
         createdAt: serverTimestamp(),
       });
 
@@ -84,17 +122,21 @@ export default function DirectMessageScreen({ route, navigation }) {
       await setDoc(
         threadRef,
         {
-          participantIds: [currentUser.uid, peerUser.id],
-          lastMessageText: textToSend.trim(),
+          participantIds: [currentUser.uid, peerId],
+          lastMessageText: textToSend,
           lastMessageAt: serverTimestamp(),
           participants: {
             [currentUser.uid]: {
               name: userProfile?.fullName || currentUser.email,
               username: userProfile?.username || 'user',
+              photoURL: userProfile?.photoURL || null,
+              role: userProfile?.roles?.[0] || 'Filmmaker',
             },
-            [peerUser.id]: {
+            [peerId]: {
               name: peerUser.fullName || peerUser.name || 'Filmmaker',
               username: peerUser.username || 'crew',
+              photoURL: peerUser.photoURL || peerUser.avatar || null,
+              role: peerUser.roles?.[0] || peerUser.role || 'Crew',
             },
           },
         },
@@ -102,19 +144,21 @@ export default function DirectMessageScreen({ route, navigation }) {
       );
     } catch (error) {
       Alert.alert('Send Error', error.message);
+    } finally {
+      setIsSending(false);
     }
   };
 
-  // Option 1: Clear Chat (Wipes message docs, retains conversation in recents)
+  // Option 1: Clear Chat (Wipes message documents, preserves thread and connection)
   const handleClearChat = async () => {
     setIsMenuVisible(false);
     Alert.alert(
       'Clear Chat',
-      'Are you sure you want to clear all messages in this conversation?',
+      'Are you sure you want to clear all messages in this conversation? The connection will remain active.',
       [
         { text: 'Cancel', style: 'cancel' },
         {
-          text: 'Clear',
+          text: 'Clear Messages',
           style: 'destructive',
           onPress: async () => {
             try {
@@ -137,16 +181,16 @@ export default function DirectMessageScreen({ route, navigation }) {
     );
   };
 
-  // Option 2: Delete Chat (Wipes messages AND deletes the thread from recents list)
+  // Option 2: Delete Chat (Removes thread from recent chats, preserves connection)
   const handleDeleteChat = async () => {
     setIsMenuVisible(false);
     Alert.alert(
       'Delete Chat',
-      'This will delete the messages and remove this thread from your recents list (connection remains).',
+      'This removes the conversation from your recent chats list. Your filmmaker connection remains intact.',
       [
         { text: 'Cancel', style: 'cancel' },
         {
-          text: 'Delete',
+          text: 'Delete Chat',
           style: 'destructive',
           onPress: async () => {
             try {
@@ -171,7 +215,7 @@ export default function DirectMessageScreen({ route, navigation }) {
     setIsMenuVisible(false);
     Alert.alert(
       'Block Filmmaker',
-      `Are you sure you want to block ${peerUser?.fullName || 'this user'}?`,
+      `Block ${peerUser?.fullName || peerUser?.name || 'this filmmaker'}? You will no longer be able to message each other.`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -181,9 +225,9 @@ export default function DirectMessageScreen({ route, navigation }) {
             try {
               const userRef = doc(db, 'users', currentUser.uid);
               await updateDoc(userRef, {
-                blockedUids: arrayUnion(peerUser.id),
+                blockedUids: arrayUnion(peerId),
               });
-              Alert.alert('Blocked', 'User has been blocked.');
+              Alert.alert('Blocked', 'Filmmaker has been blocked.');
               navigation.goBack();
             } catch (err) {
               Alert.alert('Error', err.message);
@@ -196,33 +240,59 @@ export default function DirectMessageScreen({ route, navigation }) {
 
   return (
     <KeyboardAvoidingView
-      style={[styles.container, { backgroundColor: theme?.background || '#0c0d0e' }]}
+      style={[styles.container, { backgroundColor: theme.background }]}
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
     >
-      {/* Top Header with Back Arrow and 3 Dots on Far Right */}
-      <View style={[styles.header, { backgroundColor: theme?.card || '#181b1f', borderColor: theme?.cardBorder || '#242830' }]}>
+      {/* Stationary Top Header */}
+      <View
+        style={[
+          styles.header,
+          { backgroundColor: theme.card, borderBottomColor: theme.cardBorder },
+        ]}
+      >
         <View style={styles.headerLeft}>
           <BackButton />
           <View style={styles.headerInfo}>
-            <Text style={[styles.peerName, { color: theme?.text || '#ffffff' }]}>
+            <Text style={[styles.peerName, { color: theme.text }]} numberOfLines={1}>
               {peerUser?.fullName || peerUser?.name || 'Filmmaker'}
             </Text>
-            <Text style={[styles.peerUsername, { color: theme?.textSecondary || '#9ca3af' }]}>
+            <Text style={[styles.peerUsername, { color: theme.textSecondary }]} numberOfLines={1}>
               @{peerUser?.username || 'crew'}
             </Text>
           </View>
         </View>
 
-        {/* 3 Dots Option Menu Icon */}
+        {/* 3-Dots Action Menu */}
         <TouchableOpacity
-          style={[styles.menuBtn, { backgroundColor: theme?.surface || '#121417', borderColor: theme?.cardBorder || '#242830' }]}
+          style={[
+            styles.menuBtn,
+            { backgroundColor: theme.surface, borderColor: theme.cardBorder },
+          ]}
           onPress={() => setIsMenuVisible(true)}
           activeOpacity={0.7}
         >
-          <Text style={[styles.menuIcon, { color: theme?.text || '#ffffff' }]}>⋮</Text>
+          <Text style={[styles.menuIcon, { color: theme.text }]}>⋮</Text>
         </TouchableOpacity>
       </View>
+
+      {/* Blocked Alert Banner */}
+      {isBlockedByMe && (
+        <View style={[styles.blockedBanner, { backgroundColor: theme.dangerBg }]}>
+          <Text style={[styles.blockedBannerText, { color: theme.text }]}>
+            You have blocked this filmmaker. Unblock in settings to message.
+          </Text>
+        </View>
+      )}
+
+      {/* Connection Required Banner */}
+      {!isConnected && !checkingConnection && (
+        <View style={[styles.blockedBanner, { backgroundColor: '#2a1a1a', borderColor: '#522b2b', borderWidth: 1 }]}>
+          <Text style={[styles.blockedBannerText, { color: '#f87171' }]}>
+            ⚠️ Connection Required: Messaging is restricted until a mutual contact request is accepted.
+          </Text>
+        </View>
+      )}
 
       {/* Messages Feed */}
       <FlatList
@@ -238,11 +308,20 @@ export default function DirectMessageScreen({ route, navigation }) {
                 style={[
                   styles.messageBubble,
                   isMe
-                    ? { backgroundColor: theme?.primary || '#f5a623' }
-                    : { backgroundColor: theme?.card || '#181b1f', borderColor: theme?.cardBorder || '#242830', borderWidth: 1 },
+                    ? { backgroundColor: theme.primary }
+                    : {
+                        backgroundColor: theme.card,
+                        borderColor: theme.cardBorder,
+                        borderWidth: 1,
+                      },
                 ]}
               >
-                <Text style={[styles.messageText, { color: isMe ? '#000000' : theme?.text || '#ffffff' }]}>
+                <Text
+                  style={[
+                    styles.messageText,
+                    { color: isMe ? '#000000' : theme.text },
+                  ]}
+                >
                   {item.text}
                 </Text>
               </View>
@@ -252,23 +331,36 @@ export default function DirectMessageScreen({ route, navigation }) {
         contentContainerStyle={styles.messagesList}
         ListEmptyComponent={
           <View style={styles.emptyContainer}>
-            <Text style={[styles.emptyText, { color: theme?.textSecondary || '#9ca3af' }]}>
-              No messages here yet.
+            <Text style={[styles.emptyIcon, { color: theme.textMuted }]}>💬</Text>
+            <Text style={[styles.emptyText, { color: theme.textSecondary }]}>
+              No messages yet. Send a message to start collaborating.
             </Text>
           </View>
         }
       />
 
-      {/* Multiline Input Bar */}
-      <View style={[styles.inputContainer, { backgroundColor: theme?.card || '#181b1f', borderColor: theme?.cardBorder || '#242830' }]}>
+      {/* Input Bar */}
+      <View
+        style={[
+          styles.inputContainer,
+          { backgroundColor: theme.card, borderTopColor: theme.cardBorder },
+        ]}
+      >
         <TextInput
-          style={[styles.input, { color: theme?.text || '#ffffff' }]}
-          placeholder="Message..."
-          placeholderTextColor={theme?.textMuted || '#64748b'}
+          style={[styles.input, { color: theme.text }]}
+          placeholder={
+            !isConnected
+              ? 'Messaging locked (Connection required)...'
+              : isBlockedByMe
+              ? 'Filmmaker is blocked'
+              : 'Write a message...'
+          }
+          placeholderTextColor={theme.textMuted}
           value={inputText}
           onChangeText={setInputText}
           multiline={true}
           blurOnSubmit={false}
+          editable={!isBlockedByMe && isConnected}
           returnKeyType="default"
           textAlignVertical="center"
         />
@@ -276,39 +368,63 @@ export default function DirectMessageScreen({ route, navigation }) {
         <TouchableOpacity
           style={[
             styles.sendButton,
-            { backgroundColor: inputText.trim() ? (theme?.primary || '#f5a623') : '#33373d' },
+            {
+              backgroundColor:
+                inputText.trim() && !isBlockedByMe && isConnected ? theme.primary : '#242830',
+            },
           ]}
           onPress={handleSend}
-          disabled={!inputText.trim()}
+          disabled={!inputText.trim() || isBlockedByMe || isSending || !isConnected}
           activeOpacity={0.8}
         >
-          <Text style={[styles.sendButtonText, { color: inputText.trim() ? '#000000' : '#888888' }]}>
-            Send
-          </Text>
+          {isSending ? (
+            <ActivityIndicator size="small" color="#000000" />
+          ) : (
+            <Text
+              style={[
+                styles.sendButtonText,
+                { color: inputText.trim() && !isBlockedByMe && isConnected ? '#000000' : theme.textMuted },
+              ]}
+            >
+              Send
+            </Text>
+          )}
         </TouchableOpacity>
       </View>
 
       {/* 3-Dots Action Dropdown Modal */}
-      <Modal visible={isMenuVisible} animationType="fade" transparent onRequestClose={() => setIsMenuVisible(false)}>
+      <Modal
+        visible={isMenuVisible}
+        animationType="fade"
+        transparent
+        onRequestClose={() => setIsMenuVisible(false)}
+      >
         <Pressable style={styles.menuBackdrop} onPress={() => setIsMenuVisible(false)}>
-          <View style={[styles.dropdownMenu, { backgroundColor: theme?.card || '#181b1f', borderColor: theme?.cardBorder || '#242830' }]}>
+          <View
+            style={[
+              styles.dropdownMenu,
+              { backgroundColor: theme.card, borderColor: theme.cardBorder },
+            ]}
+          >
             <TouchableOpacity style={styles.menuOption} onPress={handleClearChat}>
               <Text style={{ fontSize: 16, marginRight: 10 }}>🧹</Text>
-              <Text style={[styles.menuOptionText, { color: theme?.text || '#ffffff' }]}>Clear Chat</Text>
+              <Text style={[styles.menuOptionText, { color: theme.text }]}>Clear Chat</Text>
             </TouchableOpacity>
 
-            <View style={[styles.menuDivider, { backgroundColor: theme?.cardBorder || '#242830' }]} />
+            <View style={[styles.menuDivider, { backgroundColor: theme.cardBorder }]} />
 
             <TouchableOpacity style={styles.menuOption} onPress={handleDeleteChat}>
               <Text style={{ fontSize: 16, marginRight: 10 }}>🗑</Text>
-              <Text style={[styles.menuOptionText, { color: theme?.text || '#ffffff' }]}>Delete Chat</Text>
+              <Text style={[styles.menuOptionText, { color: theme.text }]}>Delete Chat</Text>
             </TouchableOpacity>
 
-            <View style={[styles.menuDivider, { backgroundColor: theme?.cardBorder || '#242830' }]} />
+            <View style={[styles.menuDivider, { backgroundColor: theme.cardBorder }]} />
 
             <TouchableOpacity style={styles.menuOption} onPress={handleBlockUser}>
               <Text style={{ fontSize: 16, marginRight: 10 }}>🚫</Text>
-              <Text style={[styles.menuOptionText, { color: '#f87171' }]}>Block Filmmaker</Text>
+              <Text style={[styles.menuOptionText, { color: theme.danger }]}>
+                Block Filmmaker
+              </Text>
             </TouchableOpacity>
           </View>
         </Pressable>
@@ -335,6 +451,7 @@ const styles = StyleSheet.create({
   },
   headerInfo: {
     flex: 1,
+    marginLeft: 8,
   },
   peerName: {
     fontSize: 16,
@@ -356,17 +473,35 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: '900',
   },
+  blockedBanner: {
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    alignItems: 'center',
+  },
+  blockedBannerText: {
+    fontSize: 12,
+    fontWeight: '700',
+  },
   messagesList: {
     padding: 16,
     paddingBottom: 24,
+    flexGrow: 1,
   },
   emptyContainer: {
-    marginTop: 180,
+    flex: 1,
+    justifyContent: 'center',
     alignItems: 'center',
+    paddingHorizontal: 32,
+    marginTop: 120,
+  },
+  emptyIcon: {
+    fontSize: 36,
+    marginBottom: 12,
   },
   emptyText: {
     fontSize: 13,
-    fontStyle: 'italic',
+    textAlign: 'center',
+    lineHeight: 18,
   },
   messageRow: {
     flexDirection: 'row',
@@ -401,7 +536,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
     minHeight: 38,
     maxHeight: 120,
-    paddingHorizontal: 10,
+    paddingHorizontal: 12,
     paddingTop: 8,
     paddingBottom: 8,
   },
@@ -412,6 +547,9 @@ const styles = StyleSheet.create({
     marginLeft: 8,
     alignSelf: 'flex-end',
     marginBottom: 2,
+    minWidth: 60,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   sendButtonText: {
     fontSize: 13,
@@ -419,14 +557,14 @@ const styles = StyleSheet.create({
   },
   menuBackdrop: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
+    backgroundColor: 'rgba(0,0,0,0.6)',
     justifyContent: 'flex-start',
     alignItems: 'flex-end',
     paddingTop: 54,
     paddingRight: 16,
   },
   dropdownMenu: {
-    width: 190,
+    width: 200,
     borderRadius: 10,
     borderWidth: 1,
     paddingVertical: 6,

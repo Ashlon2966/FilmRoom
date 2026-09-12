@@ -1,9 +1,39 @@
 import React from 'react';
 import { View, Text, StyleSheet, Image, TouchableOpacity } from 'react-native';
 import { useTheme } from '../context/ThemeContext';
+import { AVAILABILITY_CONFIG, AVAILABILITY_STATUS } from '../config/rolesConfig';
 
 export default function TalentCard({ talent, onInquire, onViewReel, onPressProfile }) {
   const { theme } = useTheme();
+
+  // Resolve 4-state availability
+  let availKey = AVAILABILITY_STATUS.AVAILABLE;
+  let availDate = null;
+
+  if (talent.availability) {
+    if (typeof talent.availability === 'object') {
+      availKey = talent.availability.status || AVAILABILITY_STATUS.AVAILABLE;
+      availDate = talent.availability.availableFromDate || null;
+    } else if (typeof talent.availability === 'string') {
+      availKey = talent.availability;
+    }
+  } else if (talent.isAvailable === false) {
+    availKey = AVAILABILITY_STATUS.BUSY;
+  }
+
+  const availCfg = AVAILABILITY_CONFIG[availKey] || AVAILABILITY_CONFIG[AVAILABILITY_STATUS.AVAILABLE];
+  const availLabel =
+    availKey === AVAILABILITY_STATUS.AVAILABLE_FROM && availDate
+      ? `Avail: ${availDate}`
+      : availCfg.shortLabel;
+
+  // Representation status
+  const isRepresented = talent.representation?.isRepresented;
+  const repName = talent.representation?.agencyName || talent.representation?.managerName;
+
+  // Union & Age Range
+  const unionStatus = talent.unionStatus && talent.unionStatus !== 'Non-Union' ? talent.unionStatus : null;
+  const ageRange = talent.ageRange;
 
   return (
     <TouchableOpacity
@@ -11,16 +41,27 @@ export default function TalentCard({ talent, onInquire, onViewReel, onPressProfi
       onPress={onPressProfile}
       activeOpacity={0.9}
     >
-      {/* Top Badges Row */}
+      {/* Top Badges Row: 4-State Availability + Role & Union Badges */}
       <View style={styles.topRow}>
-        <View style={styles.statusPill}>
-          <View style={[styles.statusDot, { backgroundColor: theme.accentGreen }]} />
-          <Text style={styles.statusText}>{talent.status || 'AVAILABLE FOR HIRE'}</Text>
-        </View>
-        <View style={[styles.roleBadge, { backgroundColor: '#2a2215' }]}>
-          <Text style={[styles.roleText, { color: theme.primary }]}>
-            {talent.role || 'Cinematographer'}
+        <View style={[styles.statusPill, { backgroundColor: availCfg.bgColor, borderColor: availCfg.color + '55' }]}>
+          <View style={[styles.statusDot, { backgroundColor: availCfg.color }]} />
+          <Text style={[styles.statusText, { color: availCfg.color }]}>
+            {availLabel.toUpperCase()}
           </Text>
+        </View>
+
+        <View style={styles.topRightBadges}>
+          {unionStatus ? (
+            <View style={[styles.unionBadge, { backgroundColor: '#18202c', borderColor: '#2b3952' }]}>
+              <Text style={styles.unionText}>{unionStatus}</Text>
+            </View>
+          ) : null}
+
+          <View style={[styles.roleBadge, { backgroundColor: '#2a2215', borderColor: theme.primary + '44' }]}>
+            <Text style={[styles.roleText, { color: theme.primary }]}>
+              {talent.role || 'Filmmaker'}
+            </Text>
+          </View>
         </View>
       </View>
 
@@ -31,31 +72,52 @@ export default function TalentCard({ talent, onInquire, onViewReel, onPressProfi
         ) : (
           <View style={[styles.avatarPlaceholder, { backgroundColor: theme.surface }]}>
             <Text style={[styles.avatarInitial, { color: theme.primary }]}>
-              {talent.name ? talent.name[0] : 'F'}
+              {talent.name ? talent.name[0].toUpperCase() : 'F'}
             </Text>
           </View>
         )}
         <View style={styles.nameBlock}>
-          <Text style={[styles.name, { color: theme.text }]}>{talent.name}</Text>
-          <Text style={[styles.subText, { color: theme.textSecondary }]}>
-            @{talent.username} • {talent.location || 'Los Angeles, CA'}
+          <Text style={[styles.name, { color: theme.text }]} numberOfLines={1}>
+            {talent.name}
+          </Text>
+          <Text style={[styles.subText, { color: theme.textSecondary }]} numberOfLines={1}>
+            @{talent.username || 'crew'} • 📍 {talent.location || 'Worldwide'}
+            {ageRange ? ` • Age ${ageRange}` : ''}
           </Text>
         </View>
       </View>
 
-      {/* Bio / Logline */}
-      <Text style={[styles.bio, { color: theme.textSecondary }]} numberOfLines={3}>
-        {talent.bio}
-      </Text>
+      {/* Representation Gateway Strip */}
+      <View
+        style={[
+          styles.repStrip,
+          {
+            backgroundColor: isRepresented ? '#161922' : '#14161a',
+            borderColor: isRepresented ? '#2f3b52' : theme.cardBorder,
+          },
+        ]}
+      >
+        <Text style={[styles.repText, { color: isRepresented ? '#93c5fd' : theme.textMuted }]}>
+          {isRepresented
+            ? `🏛 Rep: ${repName || 'Agency / Management'}`
+            : '👤 Self-Represented'}
+        </Text>
+      </View>
 
-      {/* Genre Focus Chips */}
-      {talent.genres && talent.genres.length > 0 && (
-        <View style={styles.genresRow}>
-          {talent.genres.map((g, idx) => (
-            <View key={idx} style={[styles.genreChip, { backgroundColor: theme.surface }]}>
-              <Text style={[styles.genreText, { color: theme.textSecondary }]}>{g}</Text>
-            </View>
-          ))}
+      {/* Bio / Logline */}
+      {talent.bio ? (
+        <Text style={[styles.bio, { color: theme.textSecondary }]} numberOfLines={2}>
+          {talent.bio}
+        </Text>
+      ) : null}
+
+      {/* Languages or Key Crafts */}
+      {talent.languages && talent.languages.length > 0 && (
+        <View style={styles.languagesRow}>
+          <Text style={[styles.langPrefix, { color: theme.textMuted }]}>Languages:</Text>
+          <Text style={[styles.langText, { color: theme.textSecondary }]} numberOfLines={1}>
+            {Array.isArray(talent.languages) ? talent.languages.join(', ') : talent.languages}
+          </Text>
         </View>
       )}
 
@@ -63,7 +125,7 @@ export default function TalentCard({ talent, onInquire, onViewReel, onPressProfi
       {talent.gearPackage ? (
         <View style={[styles.packageBox, { backgroundColor: theme.packageBg, borderColor: theme.packageBorder }]}>
           <Text style={[styles.packageLabel, { color: theme.packageText }]}>
-            PACKAGE:{' '}
+            KIT/CREDIT:{' '}
             <Text style={[styles.packageValue, { color: theme.text }]}>
               {talent.gearPackage}
             </Text>
@@ -75,14 +137,16 @@ export default function TalentCard({ talent, onInquire, onViewReel, onPressProfi
       <View style={styles.actionRow}>
         <TouchableOpacity
           style={[styles.outlineBtn, { borderColor: theme.cardBorder }]}
-          onPress={onViewReel}
+          onPress={onViewReel || onPressProfile}
+          activeOpacity={0.8}
         >
-          <Text style={[styles.outlineBtnText, { color: theme.text }]}>View Reel</Text>
+          <Text style={[styles.outlineBtnText, { color: theme.text }]}>View Portfolio</Text>
         </TouchableOpacity>
 
         <TouchableOpacity
           style={[styles.inquireBtn, { backgroundColor: theme.primary }]}
           onPress={onInquire}
+          activeOpacity={0.85}
         >
           <Text style={styles.inquireBtnText}>Inquire</Text>
         </TouchableOpacity>
@@ -107,12 +171,10 @@ const styles = StyleSheet.create({
   statusPill: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#121e17',
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: '#1e3d29',
   },
   statusDot: {
     width: 6,
@@ -121,15 +183,31 @@ const styles = StyleSheet.create({
     marginRight: 6,
   },
   statusText: {
-    color: '#4ade80',
     fontSize: 9,
     fontWeight: '800',
-    letterSpacing: 0.5,
+    letterSpacing: 0.6,
+  },
+  topRightBadges: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  unionBadge: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+    borderWidth: 1,
+  },
+  unionText: {
+    color: '#93c5fd',
+    fontSize: 9,
+    fontWeight: '700',
   },
   roleBadge: {
     paddingHorizontal: 8,
     paddingVertical: 3,
     borderRadius: 6,
+    borderWidth: 1,
   },
   roleText: {
     fontSize: 10,
@@ -138,17 +216,17 @@ const styles = StyleSheet.create({
   profileRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 10,
+    marginBottom: 8,
   },
   avatar: {
-    width: 48,
-    height: 48,
+    width: 46,
+    height: 46,
     borderRadius: 8,
     marginRight: 12,
   },
   avatarPlaceholder: {
-    width: 48,
-    height: 48,
+    width: 46,
+    height: 46,
     borderRadius: 8,
     justifyContent: 'center',
     alignItems: 'center',
@@ -164,40 +242,51 @@ const styles = StyleSheet.create({
   name: {
     fontSize: 16,
     fontWeight: '800',
+    letterSpacing: 0.3,
   },
   subText: {
     fontSize: 12,
     marginTop: 2,
   },
-  bio: {
-    fontSize: 13,
-    lineHeight: 18,
+  repStrip: {
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 6,
+    borderWidth: 1,
     marginBottom: 10,
   },
-  genresRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 6,
-    marginBottom: 12,
-  },
-  genreChip: {
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 4,
-  },
-  genreText: {
+  repText: {
     fontSize: 11,
-    fontWeight: '600',
+    fontWeight: '700',
+  },
+  bio: {
+    fontSize: 12,
+    lineHeight: 17,
+    marginBottom: 8,
+  },
+  languagesRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 10,
+    gap: 6,
+  },
+  langPrefix: {
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  langText: {
+    fontSize: 11,
+    flex: 1,
   },
   packageBox: {
     paddingHorizontal: 12,
-    paddingVertical: 8,
+    paddingVertical: 7,
     borderRadius: 6,
     borderWidth: 1,
-    marginBottom: 14,
+    marginBottom: 12,
   },
   packageLabel: {
-    fontSize: 11,
+    fontSize: 10,
     fontWeight: '800',
     letterSpacing: 0.5,
   },
@@ -210,7 +299,7 @@ const styles = StyleSheet.create({
   },
   outlineBtn: {
     flex: 1,
-    paddingVertical: 10,
+    paddingVertical: 9,
     borderRadius: 6,
     borderWidth: 1,
     alignItems: 'center',
@@ -223,7 +312,7 @@ const styles = StyleSheet.create({
   },
   inquireBtn: {
     flex: 1,
-    paddingVertical: 10,
+    paddingVertical: 9,
     borderRadius: 6,
     alignItems: 'center',
     justifyContent: 'center',

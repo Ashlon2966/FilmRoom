@@ -6,6 +6,7 @@ import {
   FlatList,
   TouchableOpacity,
   ActivityIndicator,
+  Alert,
 } from 'react-native';
 import {
   collection,
@@ -19,9 +20,11 @@ import { useAuth } from '../../context/AuthContext';
 import { useRoom } from '../../context/RoomContext';
 import { useTheme } from '../../context/ThemeContext';
 import ProductionCallCard from '../../components/ProductionCallCard';
+import SubmitInterestModal from '../../components/SubmitInterestModal';
+import PostProductionCallModal from '../../components/PostProductionCallModal';
 
 export default function RoomsListScreen({ navigation }) {
-  const { currentUser } = useAuth();
+  const { currentUser, userProfile } = useAuth();
   const { switchRoom } = useRoom();
   const { theme } = useTheme();
 
@@ -29,6 +32,11 @@ export default function RoomsListScreen({ navigation }) {
   const [myRooms, setMyRooms] = useState([]);
   const [productionCalls, setProductionCalls] = useState([]);
   const [loading, setLoading] = useState(true);
+
+  // Modals
+  const [submitInterestVisible, setSubmitInterestVisible] = useState(false);
+  const [selectedCall, setSelectedCall] = useState(null);
+  const [postCallModalVisible, setPostCallModalVisible] = useState(false);
 
   // Stream user's production rooms (Guarded by currentUser)
   useEffect(() => {
@@ -83,6 +91,20 @@ export default function RoomsListScreen({ navigation }) {
     navigation.navigate('StagePipeline', { screen: 'Stage1_Ideation' });
   };
 
+  const handleExpressInterest = (call) => {
+    if (!currentUser?.uid) {
+      Alert.alert('Sign In Required', 'Please sign in to submit interest.');
+      return;
+    }
+    if (call.createdBy === currentUser.uid) {
+      Alert.alert('Your Production Call', 'You posted this crew call to The Board.');
+      return;
+    }
+
+    setSelectedCall(call);
+    setSubmitInterestVisible(true);
+  };
+
   return (
     <View style={[styles.container, { backgroundColor: theme?.background || '#0c0d0e' }]}>
       {/* Pinned Top Bar */}
@@ -91,12 +113,22 @@ export default function RoomsListScreen({ navigation }) {
           <Text style={[styles.headerTitle, { color: theme?.text || '#ffffff' }]}>
             THE <Text style={{ color: theme?.primary || '#f5a623' }}>BOARD</Text>
           </Text>
-          <TouchableOpacity
-            style={[styles.createBtn, { backgroundColor: theme?.primary || '#f5a623' }]}
-            onPress={() => navigation.navigate('CreateRoom')}
-          >
-            <Text style={styles.createBtnText}>+ New Room</Text>
-          </TouchableOpacity>
+
+          {activeSegment === 'ROOMS' ? (
+            <TouchableOpacity
+              style={[styles.actionBtn, { backgroundColor: theme?.primary || '#f5a623' }]}
+              onPress={() => navigation.navigate('CreateRoom')}
+            >
+              <Text style={styles.actionBtnText}>+ New Room</Text>
+            </TouchableOpacity>
+          ) : (
+            <TouchableOpacity
+              style={[styles.actionBtn, { backgroundColor: theme?.primary || '#f5a623' }]}
+              onPress={() => setPostCallModalVisible(true)}
+            >
+              <Text style={styles.actionBtnText}>+ Post Crew Call</Text>
+            </TouchableOpacity>
+          )}
         </View>
 
         {/* Segmented Toggle: Production Rooms vs Public Crew Calls */}
@@ -217,20 +249,7 @@ export default function RoomsListScreen({ navigation }) {
           renderItem={({ item }) => (
             <ProductionCallCard
               project={item}
-              onExpressInterest={() => {
-                navigation.navigate('MessagesTab', {
-                  screen: 'DirectMessage',
-                  params: {
-                    peerUser: {
-                      id: item.createdBy,
-                      fullName: item.director || 'Production Lead',
-                    },
-                  },
-                });
-              }}
-              onAnalyzeMatch={() => {
-                alert(`Analyzing qualifications for ${item.title}...`);
-              }}
+              onExpressInterest={() => handleExpressInterest(item)}
             />
           )}
           contentContainerStyle={{ padding: 16, paddingBottom: 90 }}
@@ -240,12 +259,42 @@ export default function RoomsListScreen({ navigation }) {
                 No Calls Posted
               </Text>
               <Text style={[styles.emptySub, { color: theme?.textSecondary || '#9ca3af' }]}>
-                No public crew calls have been posted to The Board yet.
+                No public crew calls have been posted to The Board yet. Tap "+ Post Crew Call" above to broadcast open department positions.
               </Text>
             </View>
           }
         />
       )}
+
+      {/* Flow B Modal for Crew Call Submissions */}
+      {selectedCall && (
+        <SubmitInterestModal
+          visible={submitInterestVisible}
+          targetLead={{
+            uid: selectedCall.createdBy,
+            name: selectedCall.director || 'Production Lead',
+            role: 'Director / Production Lead',
+            category: 'PRODUCTION',
+          }}
+          initialProject={selectedCall.title}
+          initialRole={selectedCall.neededRoles?.[0] || ''}
+          onClose={() => {
+            setSubmitInterestVisible(false);
+            setSelectedCall(null);
+          }}
+          onSuccess={() => {
+            setSubmitInterestVisible(false);
+            setSelectedCall(null);
+          }}
+        />
+      )}
+
+      {/* Modal to Post New Crew Call to The Board */}
+      <PostProductionCallModal
+        visible={postCallModalVisible}
+        onClose={() => setPostCallModalVisible(false)}
+        onPublished={() => setPostCallModalVisible(false)}
+      />
     </View>
   );
 }
@@ -269,12 +318,12 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     letterSpacing: 1,
   },
-  createBtn: {
+  actionBtn: {
     paddingHorizontal: 14,
     paddingVertical: 8,
     borderRadius: 6,
   },
-  createBtnText: {
+  actionBtnText: {
     color: '#000000',
     fontWeight: 'bold',
     fontSize: 12,

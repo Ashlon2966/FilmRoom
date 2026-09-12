@@ -16,6 +16,7 @@ import {
   getDocs,
 } from 'firebase/firestore';
 import { db } from '../../../firebaseConfig';
+import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
 import TalentCard from '../../components/TalentCard';
 import FilterModal from '../../components/FilterModal';
@@ -25,6 +26,7 @@ const PAGE_SIZE = 20;
 
 export default function ExploreDirectoryScreen({ navigation }) {
   const { theme } = useTheme();
+  const { currentUser } = useAuth();
 
   const [talents, setTalents] = useState([]);
   const [lastVisibleDoc, setLastVisibleDoc] = useState(null);
@@ -37,21 +39,26 @@ export default function ExploreDirectoryScreen({ navigation }) {
   const [isFilterModalOpen, setIsFilterModalOpen] = useState(false);
   const [activeFilters, setActiveFilters] = useState({
     status: 'ALL',
+    category: 'ALL',
     role: 'All',
+    representation: 'ALL',
+    unionStatus: 'All',
     region: '',
     skillKeyword: '',
   });
 
   const [selectedFilmmaker, setSelectedFilmmaker] = useState(null);
 
-  // Check if any filter is actively applied
   const isFiltered =
     activeFilters.status !== 'ALL' ||
+    activeFilters.category !== 'ALL' ||
     activeFilters.role !== 'All' ||
+    activeFilters.representation !== 'ALL' ||
+    activeFilters.unionStatus !== 'All' ||
     activeFilters.region !== '' ||
     activeFilters.skillKeyword !== '';
 
-  // Load first 20 creatives from Firestore
+  // Load first page from Firestore
   const fetchFirstPage = async () => {
     setLoading(true);
     try {
@@ -71,7 +78,7 @@ export default function ExploreDirectoryScreen({ navigation }) {
     }
   };
 
-  // Pagination (21-40, 41-60...)
+  // Cursor-based pagination
   const fetchNextPage = async () => {
     if (!lastVisibleDoc || !hasMore || loading) return;
 
@@ -101,80 +108,117 @@ export default function ExploreDirectoryScreen({ navigation }) {
     fetchFirstPage();
   }, []);
 
-  // Multi-variable filtration
+  // Filter out current user and apply active filters
   const filteredList = talents.filter((t) => {
-    if (activeFilters.status === 'AVAILABLE' && t.isAvailable === false) return false;
-    if (activeFilters.status === 'BUSY' && t.isAvailable !== false) return false;
+    // Exclude current user from talent directory
+    if (currentUser?.uid && t.id === currentUser.uid) return false;
 
+    // 1. Availability Status Filter
+    if (activeFilters.status !== 'ALL') {
+      const userStatus =
+        t.availability?.status || (t.isAvailable !== false ? 'AVAILABLE' : 'BUSY');
+      if (userStatus !== activeFilters.status) return false;
+    }
+
+    // 2. Category Filter
+    if (activeFilters.category !== 'ALL') {
+      if (t.category !== activeFilters.category) return false;
+    }
+
+    // 3. Role Filter
     if (activeFilters.role !== 'All') {
-      const hasRole = t.roles && t.roles.includes(activeFilters.role);
-      if (!hasRole) return false;
+      const matchRole =
+        t.role === activeFilters.role || (t.roles && t.roles.includes(activeFilters.role));
+      if (!matchRole) return false;
     }
 
+    // 4. Representation Filter
+    if (activeFilters.representation !== 'ALL') {
+      const isRep = !!t.representation?.isRepresented;
+      if (activeFilters.representation === 'REPRESENTED' && !isRep) return false;
+      if (activeFilters.representation === 'SELF' && isRep) return false;
+    }
+
+    // 5. Union Status Filter
+    if (activeFilters.unionStatus !== 'All') {
+      const currentUnion = t.unionStatus || 'Non-Union';
+      if (currentUnion !== activeFilters.unionStatus) return false;
+    }
+
+    // 6. Region Filter
     if (activeFilters.region) {
-      const locMatch = (t.location || '').toLowerCase().includes(activeFilters.region.toLowerCase());
-      if (!locMatch) return false;
+      const loc = (t.location || t.city || '').toLowerCase();
+      if (!loc.includes(activeFilters.region.toLowerCase())) return false;
     }
 
+    // 7. Skill / Gear / Language Keyword Filter
     if (activeFilters.skillKeyword) {
       const kw = activeFilters.skillKeyword.toLowerCase();
       const gearMatch = (t.equipment || []).some((item) => item.toLowerCase().includes(kw));
       const bioMatch = (t.bio || '').toLowerCase().includes(kw);
-      if (!gearMatch && !bioMatch) return false;
+      const langMatch = Array.isArray(t.languages)
+        ? t.languages.some((l) => l.toLowerCase().includes(kw))
+        : (t.languages || '').toLowerCase().includes(kw);
+      if (!gearMatch && !bioMatch && !langMatch) return false;
     }
 
-    const matchesSearch =
-      (t.fullName || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (t.bio || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (t.username || '').toLowerCase().includes(searchQuery.toLowerCase());
+    // Text Search Bar Query Filter
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      const nameMatch = (t.fullName || t.displayName || t.name || '').toLowerCase().includes(q);
+      const userMatch = (t.username || '').toLowerCase().includes(q);
+      const roleMatch = (t.role || (t.roles && t.roles.join(' ')) || '').toLowerCase().includes(q);
+      const bioMatch = (t.bio || '').toLowerCase().includes(q);
+      if (!nameMatch && !userMatch && !roleMatch && !bioMatch) return false;
+    }
 
-    return matchesSearch;
+    return true;
   });
 
   return (
-    <View style={[styles.container, { backgroundColor: theme?.background || '#0c0d0e' }]}>
+    <View style={[styles.container, { backgroundColor: theme.background }]}>
       {/* Top Header */}
-      <View style={styles.header}>
+      <View style={[styles.header, { backgroundColor: theme.surface, borderBottomColor: theme.cardBorder }]}>
         <View style={styles.headerTitleRow}>
-          <Text style={[styles.mainTitle, { color: theme?.text || '#ffffff' }]}>
-            Talent <Text style={{ color: theme?.primary || '#f5a623' }}>Directory</Text>
+          <Text style={[styles.mainTitle, { color: theme.text }]}>
+            CREW <Text style={{ color: theme.primary }}>DIRECTORY</Text>
           </Text>
 
-          {/* Filter Trigger Button with Active Indicator */}
+          {/* Filter Trigger Button */}
           <TouchableOpacity
             style={[
               styles.filterIconBtn,
               {
-                backgroundColor: isFiltered ? '#2a2215' : (theme?.card || '#181b1f'),
-                borderColor: isFiltered ? (theme?.primary || '#f5a623') : (theme?.cardBorder || '#242830'),
+                backgroundColor: isFiltered ? '#242830' : theme.card,
+                borderColor: isFiltered ? theme.primary : theme.cardBorder,
               },
             ]}
             onPress={() => setIsFilterModalOpen(true)}
             activeOpacity={0.8}
           >
-            <Text style={{ fontSize: 16 }}>🎛</Text>
+            <Text style={{ fontSize: 13 }}>🎛</Text>
             <Text
               style={[
                 styles.filterBtnText,
-                { color: isFiltered ? (theme?.primary || '#f5a623') : (theme?.text || '#ffffff') },
+                { color: isFiltered ? theme.primary : theme.text },
               ]}
             >
               Filter
             </Text>
-            {isFiltered && <View style={[styles.activeDot, { backgroundColor: theme?.primary || '#f5a623' }]} />}
+            {isFiltered && <View style={[styles.activeDot, { backgroundColor: theme.primary }]} />}
           </TouchableOpacity>
         </View>
 
-        <Text style={[styles.sub, { color: theme?.textSecondary || '#9ca3af' }]}>
-          Page {currentPage} • Showing {filteredList.length} Creatives
+        <Text style={[styles.sub, { color: theme.textSecondary }]}>
+          {filteredList.length} Verified Filmmakers in Network
         </Text>
 
         {/* Search Bar */}
-        <View style={[styles.searchBox, { backgroundColor: theme?.card || '#181b1f', borderColor: theme?.cardBorder || '#242830' }]}>
+        <View style={[styles.searchBox, { backgroundColor: theme.card, borderColor: theme.cardBorder }]}>
           <TextInput
-            style={[styles.searchInput, { color: theme?.text || '#ffffff' }]}
-            placeholder="Search by name, handle, or skills..."
-            placeholderTextColor={theme?.textMuted || '#64748b'}
+            style={[styles.searchInput, { color: theme.text }]}
+            placeholder="Search by name, handle, role, or craft..."
+            placeholderTextColor={theme.textMuted}
             value={searchQuery}
             onChangeText={setSearchQuery}
           />
@@ -188,24 +232,28 @@ export default function ExploreDirectoryScreen({ navigation }) {
         renderItem={({ item }) => (
           <TalentCard
             talent={{
-              name: item.fullName || 'Filmmaker',
+              id: item.id,
+              name: item.fullName || item.displayName || 'Filmmaker',
               username: item.username || 'crew',
-              role: item.roles?.[0] || 'Crew',
-              location: item.location || 'Worldwide',
-              bio: item.bio || 'No bio listed.',
-              status: item.isAvailable !== false ? 'AVAILABLE FOR HIRE' : 'MARKED AS BUSY',
+              role: item.role || item.roles?.[0] || 'Filmmaker',
+              category: item.category,
+              department: item.department,
+              isActor: item.isActor,
+              ageRange: item.ageRange,
+              location: item.location || item.city || 'Available Worldwide',
+              languages: item.languages || [],
+              unionStatus: item.unionStatus || 'Non-Union',
+              availability: item.availability || {
+                status: item.isAvailable !== false ? 'AVAILABLE' : 'BUSY',
+              },
+              representation: item.representation || { isRepresented: false },
+              bio: item.bio || '',
               gearPackage: item.equipment?.[0] || null,
-              genres: item.roles || [],
               avatar: item.photoURL,
             }}
             onPressProfile={() => setSelectedFilmmaker(item)}
             onViewReel={() => setSelectedFilmmaker(item)}
-            onInquire={() =>
-              navigation.navigate('MessagesTab', {
-                screen: 'DirectMessage',
-                params: { peerUser: { id: item.id, fullName: item.fullName, username: item.username } },
-              })
-            }
+            onInquire={() => setSelectedFilmmaker(item)}
           />
         )}
         contentContainerStyle={{ padding: 16, paddingBottom: 100 }}
@@ -213,11 +261,24 @@ export default function ExploreDirectoryScreen({ navigation }) {
         onEndReachedThreshold={0.5}
         ListFooterComponent={
           loading ? (
-            <ActivityIndicator color={theme?.primary || '#f5a623'} style={{ marginVertical: 20 }} />
-          ) : !hasMore ? (
-            <Text style={[styles.endText, { color: theme?.textMuted || '#64748b' }]}>
-              All creatives loaded (Page {currentPage})
+            <ActivityIndicator color={theme.primary} style={{ marginVertical: 20 }} />
+          ) : !hasMore && filteredList.length > 0 ? (
+            <Text style={[styles.endText, { color: theme.textMuted }]}>
+              All verified filmmakers loaded
             </Text>
+          ) : null
+        }
+        ListEmptyComponent={
+          !loading ? (
+            <View style={styles.emptyContainer}>
+              <Text style={[styles.emptyIcon, { color: theme.textMuted }]}>🧭</Text>
+              <Text style={[styles.emptyTitle, { color: theme.text }]}>No filmmakers found</Text>
+              <Text style={[styles.emptySub, { color: theme.textSecondary }]}>
+                {searchQuery || isFiltered
+                  ? 'Try adjusting your search or active filters.'
+                  : 'The directory is starting fresh. As filmmakers join FilmRoom, they will be listed here.'}
+              </Text>
+            </View>
           ) : null
         }
       />
@@ -236,12 +297,25 @@ export default function ExploreDirectoryScreen({ navigation }) {
         filmmaker={
           selectedFilmmaker
             ? {
-                name: selectedFilmmaker.fullName,
-                username: selectedFilmmaker.username,
-                role: selectedFilmmaker.roles?.[0] || 'Crew',
-                location: selectedFilmmaker.location || 'Available Worldwide',
+                id: selectedFilmmaker.id,
+                name: selectedFilmmaker.fullName || selectedFilmmaker.displayName || 'Filmmaker',
+                username: selectedFilmmaker.username || 'crew',
+                role: selectedFilmmaker.role || selectedFilmmaker.roles?.[0] || 'Filmmaker',
+                category: selectedFilmmaker.category,
+                department: selectedFilmmaker.department,
+                isActor: selectedFilmmaker.isActor,
+                ageRange: selectedFilmmaker.ageRange,
+                location: selectedFilmmaker.location || selectedFilmmaker.city || 'Available Worldwide',
+                languages: selectedFilmmaker.languages || [],
+                unionStatus: selectedFilmmaker.unionStatus || 'Non-Union',
+                availability: selectedFilmmaker.availability || {
+                  status: selectedFilmmaker.isAvailable !== false ? 'AVAILABLE' : 'BUSY',
+                },
+                representation: selectedFilmmaker.representation || { isRepresented: false },
                 bio: selectedFilmmaker.bio,
                 avatar: selectedFilmmaker.photoURL,
+                dayRate: selectedFilmmaker.dayRate,
+                showreelUrl: selectedFilmmaker.showreelUrl,
                 equipment: selectedFilmmaker.equipment || [],
                 credits: selectedFilmmaker.credits || [],
               }
@@ -253,7 +327,15 @@ export default function ExploreDirectoryScreen({ navigation }) {
           setSelectedFilmmaker(null);
           navigation.navigate('MessagesTab', {
             screen: 'DirectMessage',
-            params: { peerUser: { id: peer.id, fullName: peer.fullName, username: peer.username } },
+            params: {
+              peerUser: {
+                id: peer.id,
+                fullName: peer.fullName || peer.displayName || 'Filmmaker',
+                username: peer.username,
+                photoURL: peer.photoURL || null,
+                role: peer.role || peer.roles?.[0] || 'Filmmaker',
+              },
+            },
           });
         }}
       />
@@ -263,16 +345,21 @@ export default function ExploreDirectoryScreen({ navigation }) {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  header: { paddingHorizontal: 16, paddingTop: 44, paddingBottom: 10 },
+  header: {
+    paddingHorizontal: 16,
+    paddingTop: 44,
+    paddingBottom: 10,
+    borderBottomWidth: 1,
+  },
   headerTitleRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  mainTitle: { fontSize: 24, fontWeight: '900' },
+  mainTitle: { fontSize: 20, fontWeight: '900', letterSpacing: 1.2 },
   filterIconBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 6,
     borderWidth: 1,
     position: 'relative',
   },
@@ -285,8 +372,28 @@ const styles = StyleSheet.create({
     top: 4,
     right: 4,
   },
-  sub: { fontSize: 12, marginTop: 4 },
-  searchBox: { marginTop: 10, borderRadius: 8, borderWidth: 1, paddingHorizontal: 12, paddingVertical: 8 },
+  sub: { fontSize: 11, marginTop: 4 },
+  searchBox: { marginTop: 10, borderRadius: 8, borderWidth: 1, paddingHorizontal: 12, paddingVertical: 7 },
   searchInput: { fontSize: 13 },
   endText: { textAlign: 'center', marginVertical: 20, fontSize: 11, fontStyle: 'italic' },
+  emptyContainer: {
+    alignItems: 'center',
+    marginTop: 100,
+    paddingHorizontal: 32,
+  },
+  emptyIcon: {
+    fontSize: 40,
+    marginBottom: 12,
+  },
+  emptyTitle: {
+    fontSize: 16,
+    fontWeight: '900',
+    letterSpacing: 0.5,
+  },
+  emptySub: {
+    fontSize: 12,
+    textAlign: 'center',
+    marginTop: 6,
+    lineHeight: 18,
+  },
 });

@@ -1,5 +1,5 @@
 import { Linking, Alert } from 'react-native';
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 
 export const isValidDriveLink = (url) => {
@@ -44,7 +44,7 @@ export const viewLocalBase64File = async (fileName, base64Data) => {
   try {
     const fileUri = `${FileSystem.documentDirectory}${fileName}`;
     await FileSystem.writeAsStringAsync(fileUri, base64Data, {
-      encoding: FileSystem.EncodingType.Base64,
+      encoding: 'base64',
     });
     await Sharing.shareAsync(fileUri);
   } catch (error) {
