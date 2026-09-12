@@ -23,11 +23,11 @@ export const getConnectionId = (uidA, uidB) => {
 
 /**
  * Checks connection state between two filmmakers.
- * Returns { exists: boolean, status: string|null, isInitiator: boolean, connection: object|null }
+ * Returns { exists: boolean, status: string|null, isInitiator: boolean, isRecipient: boolean, connection: object|null }
  */
 export const getConnectionStatus = async (currentUid, targetUid) => {
   if (!currentUid || !targetUid || currentUid === targetUid) {
-    return { exists: false, status: null, isInitiator: false, connection: null };
+    return { exists: false, status: null, isInitiator: false, isRecipient: false, connection: null };
   }
 
   const connectionId = getConnectionId(currentUid, targetUid);
@@ -38,15 +38,15 @@ export const getConnectionStatus = async (currentUid, targetUid) => {
       return {
         exists: true,
         status: data.status, // 'PENDING' | 'ACCEPTED' | 'REJECTED'
-        isInitiator: data.initiatorId === currentUid,
-        isRecipient: data.recipientId === currentUid,
+        isInitiator: data.initiatorId === currentUid || data.initiatorUid === currentUid,
+        isRecipient: data.recipientId === currentUid || data.recipientUid === currentUid,
         connection: { id: snap.id, ...data },
       };
     }
-    return { exists: false, status: null, isInitiator: false, connection: null };
+    return { exists: false, status: null, isInitiator: false, isRecipient: false, connection: null };
   } catch (error) {
     console.error('Error fetching connection status:', error);
-    return { exists: false, status: null, isInitiator: false, connection: null };
+    return { exists: false, status: null, isInitiator: false, isRecipient: false, connection: null };
   }
 };
 
@@ -83,7 +83,9 @@ export const sendConnectionRequest = async (currentUser, targetUser) => {
     id: connectionId,
     users: [currentUid, targetUid],
     initiatorId: currentUid,
+    initiatorUid: currentUid,
     recipientId: targetUid,
+    recipientUid: targetUid,
     status: 'PENDING',
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
@@ -97,6 +99,20 @@ export const sendConnectionRequest = async (currentUser, targetUser) => {
       },
       [targetUid]: {
         id: targetUid,
+        fullName: targetUser.fullName || targetUser.displayName || targetUser.name || 'Filmmaker',
+        username: targetUser.username || 'crew',
+        photoURL: targetUser.photoURL || targetUser.avatar || null,
+        role: targetUser.roles?.[0] || targetUser.role || 'Crew',
+      },
+    },
+    participants: {
+      [currentUid]: {
+        fullName: currentUser.fullName || currentUser.displayName || 'Filmmaker',
+        username: currentUser.username || 'crew',
+        photoURL: currentUser.photoURL || null,
+        role: currentUser.roles?.[0] || 'Filmmaker',
+      },
+      [targetUid]: {
         fullName: targetUser.fullName || targetUser.displayName || targetUser.name || 'Filmmaker',
         username: targetUser.username || 'crew',
         photoURL: targetUser.photoURL || targetUser.avatar || null,
@@ -170,12 +186,14 @@ export const streamAcceptedConnections = (userId, onUpdate, onError) => {
 
 /**
  * Streams incoming pending requests for a user.
+ * Aligns both 'users' array-contains and 'recipientId' with Firestore security rules.
  */
 export const streamPendingRequests = (userId, onUpdate, onError) => {
   if (!userId) return () => {};
 
   const q = query(
     collection(db, 'connections'),
+    where('users', 'array-contains', userId),
     where('recipientId', '==', userId),
     where('status', '==', 'PENDING')
   );

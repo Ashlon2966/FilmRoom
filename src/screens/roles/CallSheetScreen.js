@@ -6,11 +6,13 @@ import { useRoom } from '../../context/RoomContext';
 import { useTheme } from '../../context/ThemeContext';
 import CustomInput from '../../components/CustomInput';
 import CustomButton from '../../components/CustomButton';
+import { SingleDatePickerField } from '../../components/CinemaDatePicker';
 
 export default function CallSheetScreen() {
   const { roomData } = useRoom();
   const { theme } = useTheme();
 
+  const [shootDate, setShootDate] = useState('14 Oct 2026');
   const [shootDay, setShootDay] = useState('Day 1 of 5');
   const [callTime, setCallTime] = useState('07:00 AM');
   const [location, setLocation] = useState('Stage 4, Pinewood Studios');
@@ -38,6 +40,7 @@ export default function CallSheetScreen() {
             <div>OFFICIAL DAILY CALL SHEET</div>
           </div>
           <div class="grid">
+            <div class="box"><div class="label">Shoot Date</div><div class="val">${shootDate}</div></div>
             <div class="box"><div class="label">Schedule</div><div class="val">${shootDay}</div></div>
             <div class="box"><div class="label">General Crew Call</div><div class="val">${callTime}</div></div>
             <div class="box"><div class="label">Shooting Location</div><div class="val">${location}</div></div>
@@ -59,6 +62,7 @@ export default function CallSheetScreen() {
       <Text style={[styles.title, { color: theme.text }]}>DAILY CALL SHEET</Text>
       <Text style={[styles.sub, { color: theme.textSecondary }]}>Printable Crew Notice</Text>
 
+      <SingleDatePickerField label="Shoot Date" value={shootDate} onChangeDate={setShootDate} />
       <CustomInput label="Shooting Day" value={shootDay} onChangeText={setShootDay} />
       <CustomInput label="General Call Time" value={callTime} onChangeText={setCallTime} />
       <CustomInput label="Location Address" value={location} onChangeText={setLocation} multiline />

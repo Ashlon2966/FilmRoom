@@ -31,53 +31,117 @@ service cloud.firestore {
 
     // 2. Contact Requests (Flow A & Flow B + Representation Routing)
     match /contact_requests/{requestId} {
-      allow read: if isAuthenticated() && (
-        request.auth.uid == resource.data.sender.uid ||
-        request.auth.uid == resource.data.recipientUid ||
-        request.auth.uid == resource.data.targetTalent.uid
+      // Direct document fetch (get)
+      allow get: if isAuthenticated() && (
+        resource.data.recipientUid == request.auth.uid ||
+        resource.data.senderUid == request.auth.uid ||
+        (resource.data.targetTalentUid != null && resource.data.targetTalentUid == request.auth.uid) ||
+        (resource.data.participants != null && request.auth.uid in resource.data.participants) ||
+        ('sender' in resource.data && 'uid' in resource.data.sender && resource.data.sender.uid == request.auth.uid) ||
+        ('targetTalent' in resource.data && 'uid' in resource.data.targetTalent && resource.data.targetTalent.uid == request.auth.uid)
       );
-      allow create: if isAuthenticated() && request.auth.uid == request.resource.data.sender.uid;
+      
+      // Collection query evaluation (list)
+      allow list: if isAuthenticated() && (
+        resource.data.recipientUid == request.auth.uid ||
+        resource.data.senderUid == request.auth.uid ||
+        (resource.data.targetTalentUid != null && resource.data.targetTalentUid == request.auth.uid) ||
+        (resource.data.participants != null && request.auth.uid in resource.data.participants) ||
+        ('sender' in resource.data && 'uid' in resource.data.sender && resource.data.sender.uid == request.auth.uid) ||
+        ('targetTalent' in resource.data && 'uid' in resource.data.targetTalent && resource.data.targetTalent.uid == request.auth.uid)
+      );
+
+      // Only sender can initiate a request
+      allow create: if isAuthenticated() && (
+        request.resource.data.senderUid == request.auth.uid ||
+        ('sender' in request.resource.data && request.resource.data.sender.uid == request.auth.uid)
+      );
+
+      // Recipient or sender can update/resolve/cancel/save
       allow update: if isAuthenticated() && (
-        request.auth.uid == resource.data.recipientUid ||
-        request.auth.uid == resource.data.sender.uid ||
-        request.auth.uid == resource.data.targetTalent.uid
+        resource.data.recipientUid == request.auth.uid ||
+        resource.data.senderUid == request.auth.uid ||
+        (resource.data.participants != null && request.auth.uid in resource.data.participants) ||
+        ('sender' in resource.data && 'uid' in resource.data.sender && resource.data.sender.uid == request.auth.uid) ||
+        (resource.data.targetTalentUid != null && resource.data.targetTalentUid == request.auth.uid)
       );
-      allow delete: if isAuthenticated() && request.auth.uid == resource.data.sender.uid;
+
+      // Only sender can delete their request
+      allow delete: if isAuthenticated() && (
+        resource.data.senderUid == request.auth.uid ||
+        ('sender' in resource.data && resource.data.sender.uid == request.auth.uid)
+      );
     }
 
     // 3. User-to-User Connections (Decoupled from chats and rooms)
     match /connections/{connectionId} {
-      allow read: if isAuthenticated() && (
+      allow get: if isAuthenticated() && (
         (resource.data.users != null && request.auth.uid in resource.data.users) ||
-        (resource.data.uids != null && request.auth.uid in resource.data.uids)
+        (resource.data.uids != null && request.auth.uid in resource.data.uids) ||
+        (resource.data.participants != null && request.auth.uid in resource.data.participants) ||
+        resource.data.recipientId == request.auth.uid ||
+        resource.data.initiatorId == request.auth.uid ||
+        resource.data.recipientUid == request.auth.uid ||
+        resource.data.initiatorUid == request.auth.uid ||
+        resource.data.talentUid == request.auth.uid ||
+        resource.data.managerUid == request.auth.uid
+      );
+      allow list: if isAuthenticated() && (
+        (resource.data.users != null && request.auth.uid in resource.data.users) ||
+        (resource.data.uids != null && request.auth.uid in resource.data.uids) ||
+        resource.data.recipientId == request.auth.uid ||
+        resource.data.initiatorId == request.auth.uid ||
+        resource.data.recipientUid == request.auth.uid ||
+        resource.data.initiatorUid == request.auth.uid
       );
       allow create: if isAuthenticated() && (
         (request.resource.data.users != null && request.auth.uid in request.resource.data.users) ||
-        (request.resource.data.uids != null && request.auth.uid in request.resource.data.uids)
+        (request.resource.data.uids != null && request.auth.uid in request.resource.data.uids) ||
+        request.resource.data.initiatorId == request.auth.uid ||
+        request.resource.data.initiatorUid == request.auth.uid ||
+        request.resource.data.recipientUid == request.auth.uid
       );
       allow update: if isAuthenticated() && (
         (resource.data.users != null && request.auth.uid in resource.data.users) ||
-        (resource.data.uids != null && request.auth.uid in resource.data.uids)
+        (resource.data.uids != null && request.auth.uid in resource.data.uids) ||
+        resource.data.recipientId == request.auth.uid ||
+        resource.data.initiatorId == request.auth.uid ||
+        resource.data.recipientUid == request.auth.uid ||
+        resource.data.initiatorUid == request.auth.uid
       );
       allow delete: if isAuthenticated() && (
         (resource.data.users != null && request.auth.uid in resource.data.users) ||
-        (resource.data.uids != null && request.auth.uid in resource.data.uids)
+        (resource.data.uids != null && request.auth.uid in resource.data.uids) ||
+        resource.data.recipientId == request.auth.uid ||
+        resource.data.initiatorId == request.auth.uid ||
+        resource.data.recipientUid == request.auth.uid ||
+        resource.data.initiatorUid == request.auth.uid
       );
     }
 
     // 4. Direct Message Threads
     match /direct_threads/{threadId} {
-      allow read: if isAuthenticated() && (request.auth.uid in resource.data.participantIds);
-      allow create: if isAuthenticated() && (request.auth.uid in request.resource.data.participantIds);
-      allow update: if isAuthenticated() && (request.auth.uid in resource.data.participantIds);
-      allow delete: if isAuthenticated() && (request.auth.uid in resource.data.participantIds);
+      allow read: if isAuthenticated() && (
+        (resource.data.participantIds != null && request.auth.uid in resource.data.participantIds) ||
+        threadId.matches('.*' + request.auth.uid + '.*')
+      );
+      allow create: if isAuthenticated() && (
+        (request.resource.data.participantIds != null && request.auth.uid in request.resource.data.participantIds) ||
+        threadId.matches('.*' + request.auth.uid + '.*')
+      );
+      allow update, delete: if isAuthenticated() && (
+        (resource.data.participantIds != null && request.auth.uid in resource.data.participantIds) ||
+        threadId.matches('.*' + request.auth.uid + '.*')
+      );
     }
 
-    // 5. Direct Messages
+    // 5. Direct Messages (Thread-isolated)
     match /direct_messages/{threadId}/chats/{messageId} {
-      allow read: if isAuthenticated();
-      allow create: if isAuthenticated() && request.resource.data.senderId == request.auth.uid;
-      allow delete: if isAuthenticated();
+      allow read: if isAuthenticated() && threadId.matches('.*' + request.auth.uid + '.*');
+      allow create: if isAuthenticated() &&
+        request.resource.data.senderId == request.auth.uid &&
+        threadId.matches('.*' + request.auth.uid + '.*');
+      allow delete: if isAuthenticated() && threadId.matches('.*' + request.auth.uid + '.*');
     }
 
     // 6. Production Rooms & Slate

@@ -17,6 +17,7 @@ import {
   streamOutgoingRequests,
   acceptContactRequest,
   declineContactRequest,
+  toggleSaveContactRequest,
   REQUEST_STATUS,
   REQUEST_TYPES,
 } from '../../services/contactRequestService';
@@ -26,7 +27,7 @@ export default function RequestsHubScreen({ navigation }) {
   const { theme } = useTheme();
   const { currentUser } = useAuth();
 
-  const [activeSegment, setActiveSegment] = useState('INCOMING'); // 'INCOMING' | 'OUTGOING' | 'CONNECTIONS'
+  const [activeSegment, setActiveSegment] = useState('INCOMING'); // 'INCOMING' | 'OUTGOING' | 'SAVED' | 'CONNECTIONS'
   const [incomingRequests, setIncomingRequests] = useState([]);
   const [outgoingRequests, setOutgoingRequests] = useState([]);
   const [connections, setConnections] = useState([]);
@@ -70,6 +71,16 @@ export default function RequestsHubScreen({ navigation }) {
   const pendingIncomingCount = incomingRequests.filter(
     (r) => r.status === REQUEST_STATUS.PENDING
   ).length;
+
+  const savedRequests = incomingRequests.filter((r) => r.isSaved);
+
+  const handleToggleSave = async (req) => {
+    try {
+      await toggleSaveContactRequest(req.id, !!req.isSaved);
+    } catch (err) {
+      Alert.alert('Error', err.message);
+    }
+  };
 
   // Handle Accept
   const handleAccept = async (req) => {
@@ -161,7 +172,7 @@ export default function RequestsHubScreen({ navigation }) {
           Contextual hiring inquiries, submissions, and verified connections
         </Text>
 
-        {/* 3-Segment Control */}
+        {/* 4-Segment Control */}
         <View style={[styles.segmentedControl, { backgroundColor: theme.card, borderColor: theme.cardBorder }]}>
           {/* Incoming */}
           <TouchableOpacity
@@ -178,7 +189,7 @@ export default function RequestsHubScreen({ navigation }) {
                   { color: activeSegment === 'INCOMING' ? theme.primary : theme.textSecondary },
                 ]}
               >
-                Incoming
+                Received
               </Text>
               {pendingIncomingCount > 0 && (
                 <View style={[styles.countBadge, { backgroundColor: theme.primary }]}>
@@ -202,7 +213,25 @@ export default function RequestsHubScreen({ navigation }) {
                 { color: activeSegment === 'OUTGOING' ? theme.primary : theme.textSecondary },
               ]}
             >
-              Outgoing ({outgoingRequests.length})
+              Sent ({outgoingRequests.length})
+            </Text>
+          </TouchableOpacity>
+
+          {/* Saved */}
+          <TouchableOpacity
+            style={[
+              styles.segmentBtn,
+              activeSegment === 'SAVED' && { backgroundColor: theme.surface },
+            ]}
+            onPress={() => setActiveSegment('SAVED')}
+          >
+            <Text
+              style={[
+                styles.segmentText,
+                { color: activeSegment === 'SAVED' ? theme.primary : theme.textSecondary },
+              ]}
+            >
+              Saved ({savedRequests.length})
             </Text>
           </TouchableOpacity>
 
@@ -275,34 +304,46 @@ export default function RequestsHubScreen({ navigation }) {
                     </Text>
                   </View>
 
-                  <View
-                    style={[
-                      styles.statusPill,
-                      {
-                        backgroundColor:
-                          item.status === REQUEST_STATUS.ACCEPTED
-                            ? '#1e3d29'
-                            : item.status === REQUEST_STATUS.DECLINED
-                            ? '#3d1c1c'
-                            : '#242830',
-                      },
-                    ]}
-                  >
-                    <Text
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                    <TouchableOpacity
+                      onPress={() => handleToggleSave(item)}
+                      style={styles.starSaveBtn}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={{ fontSize: 16, color: item.isSaved ? theme.primary : theme.textMuted }}>
+                        {item.isSaved ? '★' : '☆'}
+                      </Text>
+                    </TouchableOpacity>
+
+                    <View
                       style={[
-                        styles.statusText,
+                        styles.statusPill,
                         {
-                          color:
+                          backgroundColor:
                             item.status === REQUEST_STATUS.ACCEPTED
-                              ? '#4ade80'
+                              ? '#1e3d29'
                               : item.status === REQUEST_STATUS.DECLINED
-                              ? '#f87171'
-                              : theme.textSecondary,
+                              ? '#3d1c1c'
+                              : '#242830',
                         },
                       ]}
                     >
-                      {item.status}
-                    </Text>
+                      <Text
+                        style={[
+                          styles.statusText,
+                          {
+                            color:
+                              item.status === REQUEST_STATUS.ACCEPTED
+                                ? '#4ade80'
+                                : item.status === REQUEST_STATUS.DECLINED
+                                ? '#f87171'
+                                : theme.textSecondary,
+                          },
+                        ]}
+                      >
+                        {item.status}
+                      </Text>
+                    </View>
                   </View>
                 </View>
 
@@ -351,6 +392,12 @@ export default function RequestsHubScreen({ navigation }) {
                   {item.details?.roleName && (
                     <Text style={[styles.detailLine, { color: theme.text }]}>
                       Role Needed: <Text style={{ fontWeight: '700' }}>{item.details.roleName}</Text>
+                    </Text>
+                  )}
+
+                  {item.details?.shootDates && (
+                    <Text style={[styles.detailLine, { color: theme.textSecondary }]}>
+                      📅 Projected Shoot: <Text style={{ fontWeight: '700', color: theme.text }}>{item.details.shootDates}</Text>
                     </Text>
                   )}
 
@@ -481,6 +528,12 @@ export default function RequestsHubScreen({ navigation }) {
                   </Text>
                 )}
 
+                {item.details?.shootDates && (
+                  <Text style={[styles.detailLine, { color: theme.textSecondary, marginTop: 2 }]}>
+                    📅 Shoot Window: <Text style={{ fontWeight: '700', color: theme.text }}>{item.details.shootDates}</Text>
+                  </Text>
+                )}
+
                 {item.details?.message && (
                   <Text style={[styles.messageText, { color: theme.textSecondary }]}>
                     "{item.details.message}"
@@ -519,6 +572,76 @@ export default function RequestsHubScreen({ navigation }) {
               </Text>
               <Text style={[styles.emptySub, { color: theme.textSecondary }]}>
                 Browse the Talent Directory to discover filmmakers and dispatch professional contact requests.
+              </Text>
+            </View>
+          }
+        />
+      ) : activeSegment === 'SAVED' ? (
+        /* SAVED REQUESTS */
+        <FlatList
+          data={savedRequests}
+          keyExtractor={(item) => item.id}
+          contentContainerStyle={styles.listContent}
+          renderItem={({ item }) => {
+            const isPending = item.status === REQUEST_STATUS.PENDING;
+
+            return (
+              <View style={[styles.card, { backgroundColor: theme.card, borderColor: theme.cardBorder }]}>
+                <View style={styles.cardHeader}>
+                  <Text style={[styles.targetLabel, { color: theme.primary }]}>
+                    ★ Saved Inquiry from {item.sender?.name || 'Filmmaker'}
+                  </Text>
+                  <TouchableOpacity onPress={() => handleToggleSave(item)} style={styles.starSaveBtn}>
+                    <Text style={{ fontSize: 16, color: theme.primary }}>★</Text>
+                  </TouchableOpacity>
+                </View>
+
+                {item.details?.projectName && (
+                  <Text style={[styles.detailLine, { color: theme.text, marginTop: 4 }]}>
+                    Project: <Text style={{ fontWeight: '800' }}>{item.details.projectName}</Text>
+                  </Text>
+                )}
+
+                {item.details?.shootDates && (
+                  <Text style={[styles.detailLine, { color: theme.textSecondary, marginTop: 2 }]}>
+                    📅 Shoot: <Text style={{ fontWeight: '700', color: theme.text }}>{item.details.shootDates}</Text>
+                  </Text>
+                )}
+
+                {item.details?.message ? (
+                  <Text style={[styles.messageText, { color: theme.textSecondary, marginTop: 4 }]} numberOfLines={3}>
+                    "{item.details.message}"
+                  </Text>
+                ) : null}
+
+                {isPending && (
+                  <View style={[styles.cardActionsRow, { marginTop: 12 }]}>
+                    <TouchableOpacity
+                      style={[styles.declineBtn, { borderColor: theme.cardBorder }]}
+                      onPress={() => handleDecline(item)}
+                    >
+                      <Text style={{ color: theme.danger, fontWeight: '800', fontSize: 12 }}>Decline</Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={[styles.acceptBtn, { backgroundColor: theme.primary }]}
+                      onPress={() => handleAccept(item)}
+                    >
+                      <Text style={styles.acceptBtnText}>Accept & Connect</Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
+              </View>
+            );
+          }}
+          ListEmptyComponent={
+            <View style={styles.emptyContainer}>
+              <Text style={styles.emptyIcon}>⭐</Text>
+              <Text style={[styles.emptyTitle, { color: theme.text }]}>
+                No saved inquiries
+              </Text>
+              <Text style={[styles.emptySub, { color: theme.textSecondary }]}>
+                Tap the star icon (☆) on any received contact request to bookmark it here for later review.
               </Text>
             </View>
           }
@@ -656,6 +779,10 @@ const styles = StyleSheet.create({
     color: '#000000',
     fontSize: 9,
     fontWeight: '900',
+  },
+  starSaveBtn: {
+    padding: 4,
+    marginRight: 2,
   },
   listContent: {
     padding: 16,

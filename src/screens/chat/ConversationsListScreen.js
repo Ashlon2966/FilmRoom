@@ -23,7 +23,6 @@ import { useTheme } from '../../context/ThemeContext';
 import { findUserByUsername } from '../../services/userService';
 import {
   streamAcceptedConnections,
-  streamPendingRequests,
   acceptConnectionRequest,
   rejectConnectionRequest,
   removeConnection,
@@ -85,25 +84,18 @@ export default function ConversationsListScreen({ navigation }) {
     return () => unsubscribe();
   }, [currentUser]);
 
-  // 2. Stream accepted connections & pending requests
+  // 2. Stream accepted connections
   useEffect(() => {
     if (!currentUser?.uid) return;
 
     const unsubConnections = streamAcceptedConnections(
       currentUser.uid,
       (list) => setConnections(list),
-      (err) => console.error('Connections error:', err)
-    );
-
-    const unsubPending = streamPendingRequests(
-      currentUser.uid,
-      (list) => setPendingRequests(list),
-      (err) => console.error('Pending requests error:', err)
+      (err) => console.warn('Connections stream error:', err.message)
     );
 
     return () => {
       unsubConnections();
-      unsubPending();
     };
   }, [currentUser]);
 

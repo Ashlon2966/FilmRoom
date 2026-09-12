@@ -54,8 +54,22 @@ export default function DirectMessageScreen({ route, navigation }) {
         : `${peerId}_${currentUser.uid}`
       : null;
 
-  // Blocked status check
+  // Blocked status check (bilateral)
   const isBlockedByMe = (userProfile?.blockedUids || []).includes(peerId);
+  const [isBlockedByPeer, setIsBlockedByPeer] = useState(false);
+
+  useEffect(() => {
+    if (!peerId || !currentUser?.uid) return;
+    const unsub = onSnapshot(doc(db, 'users', peerId), (snap) => {
+      if (snap.exists()) {
+        const data = snap.data();
+        setIsBlockedByPeer((data.blockedUids || []).includes(currentUser.uid));
+      }
+    });
+    return () => unsub();
+  }, [peerId, currentUser?.uid]);
+
+  const isBlocked = isBlockedByMe || isBlockedByPeer;
 
   // Check connection status
   useEffect(() => {
@@ -103,7 +117,7 @@ export default function DirectMessageScreen({ route, navigation }) {
 
   // Send message
   const handleSend = async () => {
-    if (!inputText.trim() || !threadId || isBlockedByMe || isSending || !isConnected) return;
+    if (!inputText.trim() || !threadId || isBlocked || isSending || !isConnected) return;
 
     const textToSend = inputText.trim();
     setInputText('');
@@ -285,6 +299,14 @@ export default function DirectMessageScreen({ route, navigation }) {
         </View>
       )}
 
+      {!isBlockedByMe && isBlockedByPeer && (
+        <View style={[styles.blockedBanner, { backgroundColor: '#2a1a1a', borderColor: '#522b2b', borderWidth: 1 }]}>
+          <Text style={[styles.blockedBannerText, { color: '#f87171' }]}>
+            This filmmaker is currently unavailable for messaging.
+          </Text>
+        </View>
+      )}
+
       {/* Connection Required Banner */}
       {!isConnected && !checkingConnection && (
         <View style={[styles.blockedBanner, { backgroundColor: '#2a1a1a', borderColor: '#522b2b', borderWidth: 1 }]}>
@@ -308,7 +330,7 @@ export default function DirectMessageScreen({ route, navigation }) {
                 style={[
                   styles.messageBubble,
                   isMe
-                    ? { backgroundColor: theme.primary }
+                     ? { backgroundColor: theme.primary }
                     : {
                         backgroundColor: theme.card,
                         borderColor: theme.cardBorder,
@@ -351,8 +373,8 @@ export default function DirectMessageScreen({ route, navigation }) {
           placeholder={
             !isConnected
               ? 'Messaging locked (Connection required)...'
-              : isBlockedByMe
-              ? 'Filmmaker is blocked'
+              : isBlocked
+              ? 'Filmmaker is unavailable'
               : 'Write a message...'
           }
           placeholderTextColor={theme.textMuted}
@@ -360,7 +382,7 @@ export default function DirectMessageScreen({ route, navigation }) {
           onChangeText={setInputText}
           multiline={true}
           blurOnSubmit={false}
-          editable={!isBlockedByMe && isConnected}
+          editable={!isBlocked && isConnected}
           returnKeyType="default"
           textAlignVertical="center"
         />
@@ -370,7 +392,7 @@ export default function DirectMessageScreen({ route, navigation }) {
             styles.sendButton,
             {
               backgroundColor:
-                inputText.trim() && !isBlockedByMe && isConnected ? theme.primary : '#242830',
+                inputText.trim() && !isBlocked && isConnected ? theme.primary : '#242830',
             },
           ]}
           onPress={handleSend}

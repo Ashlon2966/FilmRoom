@@ -23,6 +23,7 @@ import {
   AVAILABILITY_STATUS,
   getRolesByCategory,
 } from '../../config/rolesConfig';
+import { uploadToCloudinary } from '../../services/cloudinaryService';
 
 export default function ProfileSetupScreen({ navigation }) {
   const { theme } = useTheme();
@@ -53,7 +54,11 @@ export default function ProfileSetupScreen({ navigation }) {
 
   const [isSaving, setIsSaving] = useState(false);
 
-  // Pick Avatar
+  // Pick Avatar & Upload to Cloudinary
+  const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
+  const [cloudinaryPhotoUrl, setCloudinaryPhotoUrl] = useState(null);
+  const [photoMetadata, setPhotoMetadata] = useState(null);
+
   const pickImage = async () => {
     const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!permissionResult.granted) {
@@ -65,15 +70,28 @@ export default function ProfileSetupScreen({ navigation }) {
       mediaTypes: ['images'],
       allowsEditing: true,
       aspect: [1, 1],
-      quality: 0.3,
-      base64: true,
+      quality: 0.8,
     });
 
     if (!result.canceled && result.assets && result.assets.length > 0) {
       const asset = result.assets[0];
       setAvatarPreviewUri(asset.uri);
-      if (asset.base64) {
-        setAvatarBase64(`data:image/jpeg;base64,${asset.base64}`);
+      setIsUploadingAvatar(true);
+
+      try {
+        const uploadRes = await uploadToCloudinary({
+          fileUri: asset.uri,
+          resourceType: 'image',
+          fileName: asset.fileName || 'headshot.jpg',
+          fileSize: asset.fileSize,
+          folder: 'filmroom_avatars',
+        });
+        setCloudinaryPhotoUrl(uploadRes.secureUrl);
+        setPhotoMetadata(uploadRes);
+      } catch (err) {
+        Alert.alert('Upload Notice', err.message || 'Could not upload photo to media storage. Profile will save without image.');
+      } finally {
+        setIsUploadingAvatar(false);
       }
     }
   };
@@ -121,7 +139,8 @@ export default function ProfileSetupScreen({ navigation }) {
         unionStatus,
         ageRange: selectedRole.isActor ? ageRange.trim() : null,
         bio: bio.trim(),
-        photoURL: avatarBase64 || null,
+        photoURL: cloudinaryPhotoUrl || null,
+        photoMetadata: photoMetadata || null,
         availability: {
           status: AVAILABILITY_STATUS.AVAILABLE,
           availableFromDate: null,

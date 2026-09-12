@@ -25,6 +25,8 @@ import {
   getRolesByCategory,
   hasCapability,
 } from '../../config/rolesConfig';
+import { SingleDatePickerField } from '../../components/CinemaDatePicker';
+import MediaUploadModal from '../../components/MediaUploadModal';
 
 export default function ProfileDashboardScreen({ navigation }) {
   const { currentUser, userProfile } = useAuth();
@@ -58,6 +60,10 @@ export default function ProfileDashboardScreen({ navigation }) {
   const [selectedAvailStatus, setSelectedAvailStatus] = useState(currentAvailKey);
   const [availDateInput, setAvailDateInput] = useState(currentAvailDate || '');
   const [isSavingAvail, setIsSavingAvail] = useState(false);
+
+  // Profile Photo Management State
+  const [isPhotoModalOpen, setIsPhotoModalOpen] = useState(false);
+  const [isMediaUploadOpen, setIsMediaUploadOpen] = useState(false);
 
   // In-Place Edit Profile Modal State
   const [isEditing, setIsEditing] = useState(false);
@@ -236,6 +242,48 @@ export default function ProfileDashboardScreen({ navigation }) {
     }
   };
 
+  // Profile Photo Management
+  const handleRemovePhoto = () => {
+    Alert.alert('Remove Photo', 'Are you sure you want to remove your profile photo?', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Remove',
+        style: 'destructive',
+        onPress: async () => {
+          if (!currentUser) return;
+          try {
+            await updateDoc(doc(db, 'users', currentUser.uid), {
+              photoURL: null,
+              photoMetadata: null,
+            });
+            setIsPhotoModalOpen(false);
+          } catch (e) {
+            Alert.alert('Error', e.message);
+          }
+        },
+      },
+    ]);
+  };
+
+  const handlePhotoUploadSuccess = async (mediaRef) => {
+    if (!currentUser) return;
+    try {
+      await updateDoc(doc(db, 'users', currentUser.uid), {
+        photoURL: mediaRef.secureUrl,
+        photoMetadata: {
+          publicId: mediaRef.publicId,
+          resourceType: mediaRef.resourceType,
+          format: mediaRef.format,
+          bytes: mediaRef.bytes,
+          updatedAt: new Date().toISOString(),
+        },
+      });
+      setIsPhotoModalOpen(false);
+    } catch (e) {
+      Alert.alert('Save Error', 'Failed to update profile with new photo.');
+    }
+  };
+
   // Credits Add/Remove
   const handleAddCredit = async () => {
     if (!newCreditTitle.trim() || !currentUser) return;
@@ -319,7 +367,11 @@ export default function ProfileDashboardScreen({ navigation }) {
       {/* Profile Header: Avatar & Interactive 4-State Availability directly beneath it */}
       <View style={styles.profileHeader}>
         <View style={styles.avatarColumn}>
-          <View style={[styles.avatarWrapper, { borderColor: theme.cardBorder }]}>
+          <TouchableOpacity
+            style={[styles.avatarWrapper, { borderColor: theme.cardBorder }]}
+            onPress={() => setIsPhotoModalOpen(true)}
+            activeOpacity={0.8}
+          >
             {userProfile?.photoURL ? (
               <Image source={{ uri: userProfile.photoURL }} style={styles.avatar} />
             ) : (
@@ -338,7 +390,11 @@ export default function ProfileDashboardScreen({ navigation }) {
                 },
               ]}
             />
-          </View>
+            {/* Small camera badge */}
+            <View style={[styles.cameraBadge, { backgroundColor: theme.surface, borderColor: theme.cardBorder }]}>
+              <Text style={{ fontSize: 9 }}>📷</Text>
+            </View>
+          </TouchableOpacity>
 
           {/* Interactive 4-state availability pill positioned directly below avatar */}
           <TouchableOpacity
@@ -710,18 +766,11 @@ export default function ProfileDashboardScreen({ navigation }) {
 
             {selectedAvailStatus === AVAILABILITY_STATUS.AVAILABLE_FROM && (
               <View style={{ marginBottom: 14 }}>
-                <Text style={[styles.fieldLabel, { color: theme.textSecondary }]}>
-                  AVAILABLE FROM (DATE / MONTH)
-                </Text>
-                <TextInput
-                  style={[
-                    styles.modalInput,
-                    { backgroundColor: theme.surface, color: theme.text, borderColor: theme.cardBorder },
-                  ]}
-                  placeholder="e.g. Nov 15, 2026 or Next Month"
-                  placeholderTextColor={theme.textMuted}
+                <SingleDatePickerField
+                  label="Available From Date"
+                  placeholder="Select availability date..."
                   value={availDateInput}
-                  onChangeText={setAvailDateInput}
+                  onChangeDate={(formatted) => setAvailDateInput(formatted)}
                 />
               </View>
             )}
@@ -1073,6 +1122,75 @@ export default function ProfileDashboardScreen({ navigation }) {
           </View>
         </View>
       </Modal>
+
+      {/* ── PROFILE PHOTO MODAL ── */}
+      <Modal
+        visible={isPhotoModalOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setIsPhotoModalOpen(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.photoModalCard, { backgroundColor: theme.surface, borderColor: theme.cardBorder }]}>
+            <Text style={[styles.photoModalTitle, { color: theme.text }]}>Profile Photo</Text>
+            
+            <View style={[styles.largePhotoWrapper, { borderColor: theme.cardBorder }]}>
+              {userProfile?.photoURL ? (
+                <Image source={{ uri: userProfile.photoURL }} style={styles.largePhoto} resizeMode="cover" />
+              ) : (
+                <View style={[styles.largePhotoPlaceholder, { backgroundColor: theme.background }]}>
+                  <Text style={[styles.largePhotoInitial, { color: theme.primary }]}>
+                    {userProfile?.fullName ? userProfile.fullName[0].toUpperCase() : 'F'}
+                  </Text>
+                </View>
+              )}
+            </View>
+
+            <View style={{ width: '100%', gap: 10, marginTop: 20 }}>
+              <TouchableOpacity
+                style={[styles.primaryActionBtn, { backgroundColor: theme.primary }]}
+                onPress={() => {
+                  setIsPhotoModalOpen(false);
+                  setIsMediaUploadOpen(true);
+                }}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.primaryActionBtnText}>Change Photo</Text>
+              </TouchableOpacity>
+
+              {userProfile?.photoURL ? (
+                <TouchableOpacity
+                  style={[styles.secondaryActionBtn, { borderColor: theme.danger || '#f87171' }]}
+                  onPress={handleRemovePhoto}
+                  activeOpacity={0.8}
+                >
+                  <Text style={{ color: theme.danger || '#f87171', fontWeight: '700', fontSize: 14 }}>
+                    Remove Photo
+                  </Text>
+                </TouchableOpacity>
+              ) : null}
+
+              <TouchableOpacity
+                style={styles.cancelActionBtn}
+                onPress={() => setIsPhotoModalOpen(false)}
+                activeOpacity={0.8}
+              >
+                <Text style={{ color: theme.textSecondary, fontSize: 14 }}>Close</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Cloudinary Media Upload Modal */}
+      <MediaUploadModal
+        visible={isMediaUploadOpen}
+        onClose={() => setIsMediaUploadOpen(false)}
+        onUploadSuccess={handlePhotoUploadSuccess}
+        mediaType="image"
+        title="Upload Profile Photo"
+        folder="filmroom_avatars"
+      />
     </ScrollView>
   );
 }
@@ -1173,4 +1291,79 @@ const styles = StyleSheet.create({
   modalBtnRow: { flexDirection: 'row', justifyContent: 'flex-end', gap: 10, marginTop: 20 },
   modalCancelBtn: { paddingVertical: 10, paddingHorizontal: 16, borderRadius: 6 },
   modalSaveBtn: { paddingVertical: 10, paddingHorizontal: 18, borderRadius: 6 },
+  cameraBadge: {
+    position: 'absolute',
+    bottom: -2,
+    right: -2,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    borderWidth: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  photoModalCard: {
+    borderRadius: 16,
+    borderWidth: 1,
+    padding: 24,
+    alignItems: 'center',
+    width: '100%',
+    maxWidth: 340,
+    alignSelf: 'center',
+  },
+  photoModalTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+    marginBottom: 18,
+  },
+  largePhotoWrapper: {
+    width: 140,
+    height: 140,
+    borderRadius: 70,
+    borderWidth: 2,
+    overflow: 'hidden',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  largePhoto: {
+    width: '100%',
+    height: '100%',
+  },
+  largePhotoPlaceholder: {
+    width: '100%',
+    height: '100%',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  largePhotoInitial: {
+    fontSize: 54,
+    fontWeight: '900',
+  },
+  primaryActionBtn: {
+    height: 44,
+    borderRadius: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+    width: '100%',
+  },
+  primaryActionBtnText: {
+    color: '#000000',
+    fontWeight: '800',
+    fontSize: 14,
+  },
+  secondaryActionBtn: {
+    height: 44,
+    borderRadius: 8,
+    borderWidth: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    width: '100%',
+  },
+  cancelActionBtn: {
+    height: 40,
+    justifyContent: 'center',
+    alignItems: 'center',
+    width: '100%',
+  },
 });

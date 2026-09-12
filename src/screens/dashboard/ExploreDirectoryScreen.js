@@ -325,7 +325,7 @@ export default function ExploreDirectoryScreen({ navigation }) {
         onSendPitch={() => {
           const peer = selectedFilmmaker;
           setSelectedFilmmaker(null);
-          navigation.navigate('MessagesTab', {
+          navigation.navigate('RequestsTab', {
             screen: 'DirectMessage',
             params: {
               peerUser: {

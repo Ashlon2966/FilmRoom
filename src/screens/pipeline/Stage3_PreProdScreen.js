@@ -20,6 +20,7 @@ import CustomInput from '../../components/CustomInput';
 import CustomButton from '../../components/CustomButton';
 import StageProgressBar from '../../components/StageProgressBar';
 import BackButton from '../../components/BackButton';
+import { SingleDatePickerField } from '../../components/CinemaDatePicker';
 
 export default function Stage3_PreProdScreen({ navigation }) {
   const { currentUser, userProfile } = useAuth();
@@ -193,11 +194,11 @@ export default function Stage3_PreProdScreen({ navigation }) {
         <View style={[styles.sectionCard, { backgroundColor: theme?.card || '#181b1f', borderColor: theme?.cardBorder || '#242830' }]}>
           <Text style={[styles.cardTitle, { color: theme?.text || '#ffffff' }]}>📅 DAY 1 CALL SHEET SPECIFICATIONS</Text>
 
-          <CustomInput
+          <SingleDatePickerField
             label="Call Sheet Date"
-            placeholder="e.g. October 14, 2026"
+            placeholder="Select call sheet date..."
             value={callSheetDate}
-            onChangeText={setCallSheetDate}
+            onChangeDate={(formatted) => setCallSheetDate(formatted)}
             editable={canManage}
           />
 

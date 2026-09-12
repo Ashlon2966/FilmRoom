@@ -61,8 +61,16 @@ export const submitContactRequest = async ({
   const isRoutedToManager = isTargetRepresented && !!managerUid;
   const recipientUid = isRoutedToManager ? managerUid : targetTalent.uid;
 
+  const participants = Array.from(
+    new Set([sender.uid, recipientUid, targetTalent.uid].filter(Boolean))
+  );
+
   const requestData = {
     type: type || REQUEST_TYPES.HIRING_TO_TALENT,
+    senderUid: sender.uid,
+    recipientUid,
+    targetTalentUid: targetTalent.uid,
+    participants,
     sender: {
       uid: sender.uid,
       name: sender.name || sender.fullName || sender.displayName || 'Filmmaker',
@@ -79,7 +87,6 @@ export const submitContactRequest = async ({
       category: targetTalent.category || 'TALENT',
       photoURL: targetTalent.photoURL || null,
     },
-    recipientUid,
     isRoutedToManager,
     managerName,
     managerEmail,
@@ -142,15 +149,16 @@ export const streamIncomingRequests = (uid, callback) => {
 export const streamOutgoingRequests = (uid, callback) => {
   if (!uid) return () => {};
 
+  // Query using top-level senderUid (compatible with security rules)
   const q = query(
     collection(db, 'contact_requests'),
-    where('sender.uid', '==', uid)
+    where('senderUid', '==', uid)
   );
 
   return onSnapshot(
     q,
     (snapshot) => {
-      const requests = snapshot.docs.map((d) => ({
+      let requests = snapshot.docs.map((d) => ({
         id: d.id,
         ...d.data(),
       }));
@@ -160,8 +168,28 @@ export const streamOutgoingRequests = (uid, callback) => {
       callback(requests);
     },
     (err) => {
-      console.warn('streamOutgoingRequests error:', err.message);
-      callback([]);
+      console.warn('streamOutgoingRequests senderUid query error, falling back to nested sender.uid:', err.message);
+      // Fallback for legacy requests created before senderUid was indexed
+      try {
+        const fallbackQ = query(
+          collection(db, 'contact_requests'),
+          where('sender.uid', '==', uid)
+        );
+        return onSnapshot(
+          fallbackQ,
+          (snap) => {
+            const list = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+            list.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+            callback(list);
+          },
+          (fErr) => {
+            console.warn('streamOutgoingRequests fallback error:', fErr.message);
+            callback([]);
+          }
+        );
+      } catch {
+        callback([]);
+      }
     }
   );
 };
@@ -172,8 +200,12 @@ export const streamOutgoingRequests = (uid, callback) => {
 export const acceptContactRequest = async (request) => {
   if (!request?.id) throw new Error('Valid request object required.');
 
-  const uidA = request.sender.uid;
-  const uidB = request.targetTalent.uid;
+  const uidA = request.sender?.uid || request.senderUid;
+  const uidB = request.targetTalent?.uid || request.targetTalentUid;
+  const managerUid = request.isRoutedToManager ? request.recipientUid : null;
+  
+  // Ensure all authorized participants (including manager if routed) are in the users array
+  const users = Array.from(new Set([uidA, uidB, managerUid].filter(Boolean)));
   const canonicalConnectionId = uidA < uidB ? `${uidA}_${uidB}` : `${uidB}_${uidA}`;
 
   const now = new Date().toISOString();
@@ -190,23 +222,27 @@ export const acceptContactRequest = async (request) => {
     doc(db, 'connections', canonicalConnectionId),
     {
       id: canonicalConnectionId,
-      users: [uidA, uidB],
+      users,
       uids: [uidA < uidB ? uidA : uidB, uidA < uidB ? uidB : uidA],
       status: 'ACCEPTED',
+      initiatorId: uidA,
       initiatorUid: uidA,
+      recipientId: request.recipientUid,
       recipientUid: request.recipientUid,
       talentUid: uidB,
       fromRequestId: request.id,
       connectedAt: now,
       isManagerRouted: !!request.isRoutedToManager,
-      managerUid: request.isRoutedToManager ? request.recipientUid : null,
+      managerUid,
       userData: {
         [uidA]: request.sender,
         [uidB]: request.targetTalent,
+        ...(managerUid ? { [managerUid]: { fullName: request.managerName || 'Manager', role: 'Talent Manager' } } : {}),
       },
       participants: {
         [uidA]: request.sender,
         [uidB]: request.targetTalent,
+        ...(managerUid ? { [managerUid]: { fullName: request.managerName || 'Manager', role: 'Talent Manager' } } : {}),
       },
     },
     { merge: true }
@@ -225,6 +261,17 @@ export const declineContactRequest = async (requestId, reason = null) => {
     status: REQUEST_STATUS.DECLINED,
     resolvedAt: new Date().toISOString(),
     declineReason: reason ? reason.trim() : null,
+  });
+};
+
+/**
+ * Toggle saved status on a contact request.
+ */
+export const toggleSaveContactRequest = async (requestId, isCurrentlySaved) => {
+  if (!requestId) throw new Error('Request ID required.');
+
+  await updateDoc(doc(db, 'contact_requests', requestId), {
+    isSaved: !isCurrentlySaved,
   });
 };
 
@@ -249,15 +296,29 @@ export const getPendingRequestBetweenUsers = async (senderUid, targetUid) => {
   try {
     const q = query(
       collection(db, 'contact_requests'),
-      where('sender.uid', '==', senderUid),
-      where('targetTalent.uid', '==', targetUid),
+      where('senderUid', '==', senderUid),
+      where('targetTalentUid', '==', targetUid),
       where('status', '==', REQUEST_STATUS.PENDING)
     );
     const snap = await getDocs(q);
     if (!snap.empty) {
-      const doc = snap.docs[0];
-      return { id: doc.id, ...doc.data() };
+      const d = snap.docs[0];
+      return { id: d.id, ...d.data() };
     }
+
+    // Fallback check on nested fields for legacy docs
+    const legacyQ = query(
+      collection(db, 'contact_requests'),
+      where('sender.uid', '==', senderUid),
+      where('targetTalent.uid', '==', targetUid),
+      where('status', '==', REQUEST_STATUS.PENDING)
+    );
+    const legacySnap = await getDocs(legacyQ);
+    if (!legacySnap.empty) {
+      const d = legacySnap.docs[0];
+      return { id: d.id, ...d.data() };
+    }
+
     return null;
   } catch (err) {
     console.warn('getPendingRequestBetweenUsers check:', err.message);

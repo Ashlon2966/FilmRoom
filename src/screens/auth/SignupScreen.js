@@ -78,6 +78,7 @@ export default function SignupScreen({ navigation }) {
         photoURL: null,
         roles: [],
         blockedUsers: [], // Array of UIDs this user has blocked
+        blockedUids: [],
         isOnboarded: false,
         createdAt: serverTimestamp(),
       });

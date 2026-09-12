@@ -22,6 +22,7 @@ const PRODUCTION_TYPES = [
   'Commercial',
   'Indie / Doc',
 ];
+import { DateRangePickerField } from './CinemaDatePicker';
 
 export default function RequestContactModal({ visible, targetTalent, onClose, onSuccess }) {
   const { theme } = useTheme();
@@ -30,6 +31,8 @@ export default function RequestContactModal({ visible, targetTalent, onClose, on
   const [projectName, setProjectName] = useState('');
   const [productionType, setProductionType] = useState('Feature Film');
   const [roleName, setRoleName] = useState('');
+  const [shootStartDate, setShootStartDate] = useState('');
+  const [shootEndDate, setShootEndDate] = useState('');
   const [materialLink, setMaterialLink] = useState('');
   const [message, setMessage] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -79,7 +82,8 @@ export default function RequestContactModal({ visible, targetTalent, onClose, on
           projectName: projectName.trim(),
           productionType,
           roleName: roleName.trim(),
-          materialLink: materialLink.trim() || null,
+          materialLink: materialLink.trim(),
+          shootDates: shootStartDate && shootEndDate ? `${shootStartDate} – ${shootEndDate}` : (shootStartDate || null),
           message: message.trim(),
         },
       });
@@ -205,6 +209,17 @@ export default function RequestContactModal({ visible, targetTalent, onClose, on
               placeholderTextColor={theme.textMuted}
               value={roleName}
               onChangeText={setRoleName}
+            />
+
+            {/* Projected Shoot Dates Range */}
+            <DateRangePickerField
+              label="Projected Shoot Window (Optional)"
+              startDate={shootStartDate}
+              endDate={shootEndDate}
+              onChangeRange={({ startDate: s, endDate: e }) => {
+                setShootStartDate(s);
+                setShootEndDate(e);
+              }}
             />
 
             {/* Audition Sides / Deck Link */}
