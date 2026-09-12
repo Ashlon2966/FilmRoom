@@ -25,6 +25,7 @@ import { AVAILABILITY_CONFIG, AVAILABILITY_STATUS, hasCapability } from '../conf
 import RequestContactModal from './RequestContactModal';
 import SubmitInterestModal from './SubmitInterestModal';
 import SaveToShortlistModal from './SaveToShortlistModal';
+import SubmitReelModal from './SubmitReelModal';
 
 export default function FilmmakerDetailModal({ visible, filmmaker, onClose, onSendPitch }) {
   const { theme } = useTheme();
@@ -44,6 +45,7 @@ export default function FilmmakerDetailModal({ visible, filmmaker, onClose, onSe
   // Modal display states
   const [isRequestContactModalOpen, setIsRequestContactModalOpen] = useState(false);
   const [isSubmitInterestModalOpen, setIsSubmitInterestModalOpen] = useState(false);
+  const [isSubmitReelModalOpen, setIsSubmitReelModalOpen] = useState(false);
   const [isShortlistModalOpen, setIsShortlistModalOpen] = useState(false);
 
   // Query connection and request state when modal opens
@@ -347,6 +349,18 @@ export default function FilmmakerDetailModal({ visible, filmmaker, onClose, onSe
                   )}
                 </TouchableOpacity>
 
+                {/* Submit Reel Button */}
+                <TouchableOpacity
+                  style={[
+                    styles.shortlistBtn,
+                    { backgroundColor: theme.surface, borderColor: theme.primary },
+                  ]}
+                  onPress={() => setIsSubmitReelModalOpen(true)}
+                  activeOpacity={0.8}
+                >
+                  <Text style={[styles.shortlistBtnText, { color: theme.primary }]}>🎬 Reel</Text>
+                </TouchableOpacity>
+
                 {/* Shortlist Button (Available to hiring roles) */}
                 {canShortlist && (
                   <TouchableOpacity
@@ -487,6 +501,18 @@ export default function FilmmakerDetailModal({ visible, filmmaker, onClose, onSe
                     </Text>
                   </View>
                 )}
+
+                {!isSelf && (
+                  <TouchableOpacity
+                    style={[styles.submitReelTabBtn, { backgroundColor: theme.surface, borderColor: theme.primary }]}
+                    onPress={() => setIsSubmitReelModalOpen(true)}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={[styles.submitReelTabText, { color: theme.primary }]}>
+                      🎬 Submit Your Reel to {filmmaker.name}
+                    </Text>
+                  </TouchableOpacity>
+                )}
               </View>
             )}
 
@@ -564,6 +590,19 @@ export default function FilmmakerDetailModal({ visible, filmmaker, onClose, onSe
         onClose={() => setIsSubmitInterestModalOpen(false)}
         onSuccess={() => {
           setPendingContactRequest({ status: 'PENDING' });
+        }}
+      />
+
+      {/* Dedicated Submit Reel Modal */}
+      <SubmitReelModal
+        visible={isSubmitReelModalOpen}
+        targetLead={filmmaker}
+        onClose={() => setIsSubmitReelModalOpen(false)}
+        onSuccess={() => {
+          setPendingContactRequest({ status: 'PENDING' });
+          if (currentUser && filmmaker.id) {
+            getConnectionStatus(currentUser.uid, filmmaker.id).then(setConnectionState);
+          }
         }}
       />
 
@@ -777,4 +816,17 @@ const styles = StyleSheet.create({
   },
   creditTitle: { fontSize: 13, fontWeight: '700' },
   creditType: { fontSize: 11 },
+  submitReelTabBtn: {
+    marginTop: 14,
+    paddingVertical: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  submitReelTabText: {
+    fontSize: 13,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+  },
 });

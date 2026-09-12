@@ -12,12 +12,13 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
-import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
+import { collection, addDoc, updateDoc, deleteDoc, doc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../../firebaseConfig';
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../context/ThemeContext';
 import { DateRangePickerField, SingleDatePickerField } from './CinemaDatePicker';
 import { uploadToCloudinary } from '../services/cloudinaryService';
+import AddCrewRoleModal from './AddCrewRoleModal';
 
 const POST_TYPES = [
   { key: 'CREW_CALL', title: 'Crew Call', icon: '🎥', desc: 'Hire crew and heads of department' },
@@ -30,7 +31,7 @@ const POST_TYPES = [
 
 const COMP_OPTIONS = ['Paid', 'Unpaid', 'Negotiable'];
 
-export default function PostProductionCallModal({ visible, onClose, onPublished }) {
+export default function PostProductionCallModal({ visible, onClose, onPublished, callToEdit }) {
   const { currentUser, userProfile } = useAuth();
   const { theme } = useTheme();
 
@@ -47,6 +48,10 @@ export default function PostProductionCallModal({ visible, onClose, onPublished 
   const [compensation, setCompensation] = useState('Paid');
   const [description, setDescription] = useState('');
 
+  // Structured Crew Roles Required
+  const [crewRolesRequired, setCrewRolesRequired] = useState([]);
+  const [isAddRoleModalOpen, setIsAddRoleModalOpen] = useState(false);
+
   // Image upload
   const [attachedImageUri, setAttachedImageUri] = useState(null);
   const [attachedImageUrl, setAttachedImageUrl] = useState(null);
@@ -54,9 +59,23 @@ export default function PostProductionCallModal({ visible, onClose, onPublished 
 
   const [isPosting, setIsPosting] = useState(false);
 
-  // Reset modal state on open/close
+  // Reset modal state on open/close or populate callToEdit
   useEffect(() => {
-    if (!visible) {
+    if (visible && callToEdit) {
+      setSelectedType(callToEdit.postType || 'CREW_CALL');
+      setLookingFor(callToEdit.lookingFor || callToEdit.roleName || '');
+      setProjectName(callToEdit.projectName || callToEdit.title || '');
+      setLocation(callToEdit.location || '');
+      setStartDate(callToEdit.startDate ? new Date(callToEdit.startDate) : null);
+      setEndDate(callToEdit.endDate ? new Date(callToEdit.endDate) : null);
+      setSingleDate(callToEdit.singleDate ? new Date(callToEdit.singleDate) : null);
+      setCompensation(callToEdit.compensationTier || callToEdit.compensation || 'Paid');
+      setDescription(callToEdit.description || callToEdit.logline || '');
+      setCrewRolesRequired(callToEdit.crewRolesRequired || callToEdit.crewPositions || []);
+      setAttachedImageUrl(callToEdit.imageUrl || null);
+      setAttachedImageUri(null);
+      setIsPosting(false);
+    } else if (!visible) {
       setSelectedType(null);
       setLookingFor('');
       setProjectName('');
@@ -66,12 +85,13 @@ export default function PostProductionCallModal({ visible, onClose, onPublished 
       setSingleDate(null);
       setCompensation('Paid');
       setDescription('');
+      setCrewRolesRequired([]);
       setAttachedImageUri(null);
       setAttachedImageUrl(null);
       setIsUploadingImage(false);
       setIsPosting(false);
     }
-  }, [visible]);
+  }, [visible, callToEdit]);
 
   // Handle image pick & upload to Cloudinary
   const handlePickImage = async () => {
@@ -114,9 +134,15 @@ export default function PostProductionCallModal({ visible, onClose, onPublished 
   const handlePublish = async () => {
     if (!selectedType) return;
 
-    if (selectedType === 'CREW_CALL' && (!lookingFor.trim() || !projectName.trim())) {
-      Alert.alert('Required', 'Please specify who you are looking for and the project name.');
-      return;
+    if (selectedType === 'CREW_CALL') {
+      if (crewRolesRequired.length === 0 && !lookingFor.trim()) {
+        Alert.alert('Required', 'Please add at least one required crew role using "+ Add Role".');
+        return;
+      }
+      if (!projectName.trim()) {
+        Alert.alert('Required', 'Please specify the project name.');
+        return;
+      }
     }
     if (selectedType === 'CASTING_CALL' && (!lookingFor.trim() || !projectName.trim())) {
       Alert.alert('Required', 'Please specify the character/role and the project name.');
@@ -131,12 +157,20 @@ export default function PostProductionCallModal({ visible, onClose, onPublished 
     try {
       const typeConfig = POST_TYPES.find((t) => t.key === selectedType) || POST_TYPES[0];
 
+      const primaryRoleTitle =
+        crewRolesRequired.length > 0
+          ? crewRolesRequired.map((r) => `${r.role} (${r.quantity})`).join(', ')
+          : lookingFor.trim();
+
       const postData = {
         postType: selectedType,
         postTypeLabel: typeConfig.title,
-        title: projectName.trim() || lookingFor.trim(),
-        roleName: lookingFor.trim() || null,
-        neededRoles: lookingFor.trim() ? [lookingFor.trim()] : [],
+        title: projectName.trim() || primaryRoleTitle,
+        roleName: primaryRoleTitle || null,
+        crewRolesRequired,
+        neededRoles: crewRolesRequired.length > 0
+          ? crewRolesRequired.map((r) => r.role)
+          : (lookingFor.trim() ? [lookingFor.trim()] : []),
         location: location.trim() || 'Worldwide',
         startDate: startDate || singleDate || null,
         endDate: endDate || null,
@@ -150,9 +184,34 @@ export default function PostProductionCallModal({ visible, onClose, onPublished 
         createdAt: serverTimestamp(),
       };
 
-      await addDoc(collection(db, 'production_calls'), postData);
+      if (callToEdit) {
+        const updateData = {
+          postType: selectedType,
+          postTypeLabel: typeConfig.title,
+          title: projectName.trim() || primaryRoleTitle,
+          roleName: primaryRoleTitle || null,
+          crewRolesRequired,
+          neededRoles: crewRolesRequired.length > 0
+            ? crewRolesRequired.map((r) => r.role)
+            : (lookingFor.trim() ? [lookingFor.trim()] : []),
+          location: location.trim() || 'Worldwide',
+          startDate: startDate || singleDate || null,
+          endDate: endDate || null,
+          dates: startDate && endDate ? `${startDate} – ${endDate}` : (startDate || singleDate || 'TBD'),
+          compensationTier: compensation,
+          logline: description.trim() || '',
+          description: description.trim() || '',
+          imageUrl: attachedImageUrl || null,
+          updatedAt: serverTimestamp(),
+        };
 
-      Alert.alert('✓ Published', 'Your post is now live on The Board!');
+        await updateDoc(doc(db, 'production_calls', callToEdit.id), updateData);
+        Alert.alert('✓ Call Updated', 'Your crew call changes have been published to The Board.');
+      } else {
+        await addDoc(collection(db, 'production_calls'), postData);
+        Alert.alert('✓ Published', 'Your post is now live on The Board!');
+      }
+
       onClose();
       if (onPublished) onPublished();
     } catch (err) {
@@ -160,6 +219,31 @@ export default function PostProductionCallModal({ visible, onClose, onPublished 
     } finally {
       setIsPosting(false);
     }
+  };
+
+  const handleDeleteCall = () => {
+    if (!callToEdit?.id) return;
+    Alert.alert(
+      'Delete Crew Call',
+      'Are you sure you want to permanently remove this crew call from The Board?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await deleteDoc(doc(db, 'production_calls', callToEdit.id));
+              Alert.alert('✓ Deleted', 'Crew call removed from The Board.');
+              onClose();
+              if (onPublished) onPublished();
+            } catch (e) {
+              Alert.alert('Error', e.message);
+            }
+          },
+        },
+      ]
+    );
   };
 
   return (
@@ -170,12 +254,18 @@ export default function PostProductionCallModal({ visible, onClose, onPublished 
           <View style={styles.topRow}>
             <View>
               <Text style={[styles.modalHeading, { color: theme.text }]}>
-                {selectedType
+                {callToEdit
+                  ? 'EDIT CREW CALL'
+                  : selectedType
                   ? POST_TYPES.find((t) => t.key === selectedType)?.title.toUpperCase()
                   : 'CREATE POST'}
               </Text>
               <Text style={[styles.modalSub, { color: theme.textSecondary }]}>
-                {selectedType ? 'Fill in relevant details below' : 'What are you posting?'}
+                {callToEdit
+                  ? 'Modify roles, quantities, dates & specs'
+                  : selectedType
+                  ? 'Fill in relevant details below'
+                  : 'What are you posting?'}
               </Text>
             </View>
             <TouchableOpacity onPress={onClose} style={styles.closeBtn}>
@@ -215,15 +305,63 @@ export default function PostProductionCallModal({ visible, onClose, onPublished 
               {/* CREW CALL FIELDS */}
               {selectedType === 'CREW_CALL' && (
                 <>
-                  <Text style={[styles.inputLabel, { color: theme.textSecondary }]}>LOOKING FOR</Text>
-                  <TextInput
-                    style={[styles.input, { backgroundColor: theme.background, color: theme.text, borderColor: theme.cardBorder }]}
-                    placeholder="e.g. Cinematographer, Key Grip, Sound Mixer"
-                    placeholderTextColor={theme.textMuted}
-                    value={lookingFor}
-                    onChangeText={setLookingFor}
-                    autoFocus
-                  />
+                  <Text style={[styles.inputLabel, { color: theme.textSecondary }]}>CREW REQUIRED</Text>
+                  {crewRolesRequired.length > 0 ? (
+                    <View style={[styles.roleTable, { backgroundColor: theme.background, borderColor: theme.cardBorder }]}>
+                      {crewRolesRequired.map((item, idx) => (
+                        <View key={idx} style={[styles.roleTableRow, { borderBottomColor: theme.cardBorder }]}>
+                          <View style={{ flex: 1 }}>
+                            <Text style={[styles.roleTableRole, { color: theme.text }]}>{item.role}</Text>
+                            <Text style={{ color: theme.textMuted, fontSize: 11 }}>{item.category}</Text>
+                          </View>
+                          
+                          {/* Quantity stepper */}
+                          <View style={styles.roleTableQtyCol}>
+                            <TouchableOpacity
+                              style={[styles.smallQtyBtn, { borderColor: theme.cardBorder }]}
+                              onPress={() => {
+                                const copy = [...crewRolesRequired];
+                                if (copy[idx].quantity > 1) {
+                                  copy[idx].quantity -= 1;
+                                  setCrewRolesRequired(copy);
+                                }
+                              }}
+                            >
+                              <Text style={{ color: theme.textSecondary, fontWeight: 'bold' }}>−</Text>
+                            </TouchableOpacity>
+                            <Text style={[styles.roleTableQtyNum, { color: theme.primary }]}>{item.quantity}</Text>
+                            <TouchableOpacity
+                              style={[styles.smallQtyBtn, { borderColor: theme.cardBorder }]}
+                              onPress={() => {
+                                const copy = [...crewRolesRequired];
+                                copy[idx].quantity += 1;
+                                setCrewRolesRequired(copy);
+                              }}
+                            >
+                              <Text style={{ color: theme.textSecondary, fontWeight: 'bold' }}>+</Text>
+                            </TouchableOpacity>
+                          </View>
+
+                          {/* Remove role */}
+                          <TouchableOpacity
+                            style={styles.removeRoleBtn}
+                            onPress={() => {
+                              setCrewRolesRequired(crewRolesRequired.filter((_, i) => i !== idx));
+                            }}
+                          >
+                            <Text style={{ color: '#f87171', fontWeight: 'bold', fontSize: 14 }}>✕</Text>
+                          </TouchableOpacity>
+                        </View>
+                      ))}
+                    </View>
+                  ) : null}
+
+                  <TouchableOpacity
+                    style={[styles.addRoleTriggerBtn, { backgroundColor: theme.surface, borderColor: theme.cardBorder }]}
+                    onPress={() => setIsAddRoleModalOpen(true)}
+                  >
+                    <Text style={[styles.addRoleTriggerText, { color: theme.primary }]}>+ Add Role</Text>
+                  </TouchableOpacity>
 
                   <Text style={[styles.inputLabel, { color: theme.textSecondary, marginTop: 12 }]}>PROJECT</Text>
                   <TextInput
@@ -454,13 +592,35 @@ export default function PostProductionCallModal({ visible, onClose, onPublished 
                 {isPosting ? (
                   <ActivityIndicator color="#000000" size="small" />
                 ) : (
-                  <Text style={styles.postButtonText}>Post</Text>
+                  <Text style={styles.postButtonText}>{callToEdit ? 'Save Changes' : 'Post'}</Text>
                 )}
               </TouchableOpacity>
+
+              {callToEdit && (
+                <TouchableOpacity
+                  style={[styles.deleteCallBtn, { borderColor: theme.danger || '#f87171' }]}
+                  onPress={handleDeleteCall}
+                  disabled={isPosting}
+                  activeOpacity={0.8}
+                >
+                  <Text style={{ color: theme.danger || '#f87171', fontWeight: '800', fontSize: 13 }}>
+                    🗑 Delete Crew Call
+                  </Text>
+                </TouchableOpacity>
+              )}
             </ScrollView>
           )}
         </View>
       </View>
+
+      {/* Structured Add Crew Role Modal */}
+      <AddCrewRoleModal
+        visible={isAddRoleModalOpen}
+        onClose={() => setIsAddRoleModalOpen(false)}
+        onAddRole={(newRole) => {
+          setCrewRolesRequired((prev) => [...prev, newRole]);
+        }}
+      />
     </Modal>
   );
 }
@@ -608,9 +768,70 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginTop: 24,
   },
+  deleteCallBtn: {
+    height: 44,
+    borderRadius: 10,
+    borderWidth: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: 12,
+  },
   postButtonText: {
     color: '#000000',
     fontSize: 15,
     fontWeight: '800',
+  },
+  roleTable: {
+    borderRadius: 8,
+    borderWidth: 1,
+    marginBottom: 8,
+    overflow: 'hidden',
+  },
+  roleTableRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+  },
+  roleTableRole: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  roleTableQtyCol: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginRight: 10,
+  },
+  smallQtyBtn: {
+    width: 28,
+    height: 28,
+    borderRadius: 4,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  roleTableQtyNum: {
+    fontSize: 14,
+    fontWeight: '800',
+    minWidth: 16,
+    textAlign: 'center',
+  },
+  removeRoleBtn: {
+    padding: 6,
+  },
+  addRoleTriggerBtn: {
+    paddingVertical: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  addRoleTriggerText: {
+    fontSize: 13,
+    fontWeight: '800',
+    letterSpacing: 0.3,
   },
 });

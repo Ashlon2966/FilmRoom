@@ -23,6 +23,7 @@
     "expo-image-picker": "~17.0.11",
     "expo-print": "~15.0.8",
     "expo-sharing": "~14.0.8",
+    "expo-sqlite": "~16.0.10",
     "expo-status-bar": "~3.0.9",
     "firebase": "^12.18.0",
     "fountain-js": "^1.2.4",

@@ -7,9 +7,10 @@
  * - Cancellation support via XMLHttpRequest abort
  * - Client-side size & file-type validation
  * - Dynamic URL transformations for optimized cinema thumbnails
+ * - Detailed HTTP status & actionable diagnostic reporting
  */
 
-import { CLOUDINARY_CONFIG } from '../config/cloudinaryConfig';
+import { CLOUDINARY_CONFIG, getCloudinaryStatus, initCloudinaryConfig } from '../config/cloudinaryConfig';
 
 /**
  * Validates a file's format and size before upload to protect free-tier quotas.
@@ -52,7 +53,7 @@ export const validateMediaFile = ({ uri, size, type = 'image', name = '' }) => {
  * @param {Object} [options.cancelRef] - Mutable ref whose .current can store the abort function
  * @returns {Promise<Object>} Clean media metadata reference for Firestore
  */
-export const uploadToCloudinary = ({
+export const uploadToCloudinary = async ({
   fileUri,
   resourceType = 'image',
   fileName,
@@ -61,9 +62,12 @@ export const uploadToCloudinary = ({
   onProgress,
   cancelRef,
 }) => {
+  // Ensure local config override is loaded
+  await initCloudinaryConfig();
+
   return new Promise((resolve, reject) => {
     try {
-      // 1. Client-side pre-validation
+      // 1. Client-side pre-validation of media size & type
       validateMediaFile({
         uri: fileUri,
         size: fileSize,
@@ -73,6 +77,16 @@ export const uploadToCloudinary = ({
 
       const cloudName = CLOUDINARY_CONFIG.cloudName;
       const uploadPreset = CLOUDINARY_CONFIG.uploadPreset;
+
+      // 2. Pre-check for placeholder credentials
+      const status = getCloudinaryStatus();
+      if (status.isPlaceholder) {
+        throw new Error(
+          `Cloudinary is not yet configured with your credentials.\n\n` +
+          `Current Cloud: "${cloudName}"\n` +
+          `Please add your Cloud Name and Unsigned Preset to your .env file or Settings -> Storage & Data -> Cloudinary Setup.`
+        );
+      }
 
       const uploadUrl = `https://api.cloudinary.com/v1_1/${cloudName}/${resourceType}/upload`;
 
@@ -87,7 +101,7 @@ export const uploadToCloudinary = ({
         };
       }
 
-      // 2. Track upload progress (0% - 100%)
+      // 3. Track upload progress (0% - 100%)
       if (xhr.upload && onProgress) {
         xhr.upload.onprogress = (event) => {
           if (event.lengthComputable && event.total > 0) {
@@ -97,7 +111,7 @@ export const uploadToCloudinary = ({
         };
       }
 
-      // 3. Handle response completion
+      // 4. Handle response completion
       xhr.onload = () => {
         if (xhr.status >= 200 && xhr.status < 300) {
           try {
@@ -119,20 +133,36 @@ export const uploadToCloudinary = ({
             reject(new Error('Failed to parse Cloudinary upload response.'));
           }
         } else {
-          let errorMsg = `Upload failed (Status ${xhr.status})`;
+          let rawError = '';
           try {
             const errorRes = JSON.parse(xhr.responseText);
-            if (errorRes?.error?.message) {
-              errorMsg = errorRes.error.message;
+            rawError = errorRes?.error?.message || '';
+          } catch (_) {}
+
+          let errorDetail = `Cloudinary Error (HTTP ${xhr.status})`;
+          if (xhr.status === 401) {
+            errorDetail = `Cloudinary Authentication Error (HTTP 401): ${rawError || 'Unknown API key'}.\n` +
+              `The Cloud Name "${cloudName}" does not exist on Cloudinary or requires an API key.\n` +
+              `Please verify your Cloud Name in .env or Settings.`;
+          } else if (xhr.status === 400) {
+            if (rawError.toLowerCase().includes('preset')) {
+              errorDetail = `Cloudinary Preset Error (HTTP 400): ${rawError}.\n` +
+                `Ensure preset "${uploadPreset}" is created in Cloudinary Console (Settings -> Upload -> Upload presets) and its Signing Mode is set to "Unsigned".`;
+            } else {
+              errorDetail = `Cloudinary Request Error (HTTP 400): ${rawError || 'Invalid upload parameters'}`;
             }
-          } catch (_) {
-            // Keep default errorMsg
+          } else if (rawError) {
+            errorDetail = `Cloudinary Error (HTTP ${xhr.status}): ${rawError}`;
           }
-          reject(new Error(errorMsg));
+
+          const uploadErr = new Error(errorDetail);
+          uploadErr.statusCode = xhr.status;
+          uploadErr.rawMessage = rawError;
+          reject(uploadErr);
         }
       };
 
-      // 4. Handle network and cancellation errors
+      // 5. Handle network and cancellation errors
       xhr.onerror = () => {
         reject(new Error('Network error during upload. Please check your internet connection and try again.'));
       };
@@ -147,7 +177,7 @@ export const uploadToCloudinary = ({
         reject(cancelErr);
       };
 
-      // 5. Prepare FormData payload
+      // 6. Prepare FormData payload
       const formData = new FormData();
       formData.append('upload_preset', uploadPreset);
       if (folder) {

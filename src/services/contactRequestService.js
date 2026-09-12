@@ -20,6 +20,7 @@ import {
   onSnapshot,
 } from 'firebase/firestore';
 import { db } from '../../firebaseConfig';
+import { sendNotification, NOTIFICATION_TYPES } from './notificationService';
 
 export const REQUEST_TYPES = {
   HIRING_TO_TALENT: 'HIRING_TO_TALENT', // Flow A
@@ -110,6 +111,20 @@ export const submitContactRequest = async ({
   };
 
   const docRef = await addDoc(collection(db, 'contact_requests'), requestData);
+
+  // Dispatch In-App Notification to recipient
+  sendNotification({
+    recipientUid,
+    senderUid: sender.uid,
+    senderName: sender.name || sender.fullName || 'A filmmaker',
+    senderPhotoURL: sender.photoURL || null,
+    type: type === REQUEST_TYPES.TALENT_TO_HIRING ? NOTIFICATION_TYPES.REEL_SUBMITTED : NOTIFICATION_TYPES.CONTACT_REQUEST,
+    title: type === REQUEST_TYPES.TALENT_TO_HIRING ? 'New Reel / Craft Submission' : 'New Collaboration Request',
+    message: `${sender.name || sender.fullName || 'A filmmaker'} sent you a ${type === REQUEST_TYPES.TALENT_TO_HIRING ? 'reel submission' : 'contact request'}.`,
+    targetId: docRef.id,
+    targetType: 'CONTACT_REQUEST',
+  });
+
   return { id: docRef.id, ...requestData };
 };
 
@@ -247,6 +262,19 @@ export const acceptContactRequest = async (request) => {
     },
     { merge: true }
   );
+
+  // Dispatch In-App Notification to original requester (uidA)
+  sendNotification({
+    recipientUid: uidA,
+    senderUid: request.recipientUid,
+    senderName: request.targetTalent?.name || 'Filmmaker',
+    senderPhotoURL: request.targetTalent?.photoURL || null,
+    type: NOTIFICATION_TYPES.REQUEST_ACCEPTED,
+    title: 'Connection Accepted',
+    message: `${request.targetTalent?.name || 'A filmmaker'} accepted your contact request! You are now connected.`,
+    targetId: canonicalConnectionId,
+    targetType: 'CONNECTION',
+  });
 
   return { connectionId: canonicalConnectionId };
 };

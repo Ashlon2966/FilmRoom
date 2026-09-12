@@ -216,6 +216,28 @@ export default function ProfileDashboardScreen({ navigation }) {
     }
   };
 
+  // Remove Showreel
+  const handleRemoveShowreel = () => {
+    Alert.alert('Remove Showreel', 'Detach your showreel from your public dossier?', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Remove',
+        style: 'destructive',
+        onPress: async () => {
+          if (!currentUser) return;
+          try {
+            await updateDoc(doc(db, 'users', currentUser.uid), {
+              showreelUrl: null,
+            });
+            Alert.alert('✓ Showreel Removed', 'Your showreel link has been removed.');
+          } catch (e) {
+            Alert.alert('Error', e.message);
+          }
+        },
+      },
+    ]);
+  };
+
   // Equipment Add/Remove
   const handleAddKitItem = async () => {
     if (!newKitText.trim() || !currentUser) return;
@@ -541,26 +563,42 @@ export default function ProfileDashboardScreen({ navigation }) {
       {activeTab === 'Showreel' && (
         <View style={styles.tabContainer}>
           {userProfile?.showreelUrl ? (
-            <TouchableOpacity
-              style={[
-                styles.videoPlaceholder,
-                { backgroundColor: '#000000', borderColor: theme.primary },
-              ]}
-              onPress={() => {
-                Linking.openURL(userProfile.showreelUrl).catch(() =>
-                  Alert.alert('Error', 'Unable to open showreel URL.')
-                );
-              }}
-              activeOpacity={0.8}
-            >
-              <Text style={{ fontSize: 36 }}>🎬</Text>
-              <Text style={[styles.reelUrlLink, { color: theme.primary }]}>
-                {userProfile.showreelUrl}
-              </Text>
-              <Text style={{ color: theme.textMuted, marginTop: 6, fontSize: 11 }}>
-                Tap to preview externally (Vimeo / YouTube / Drive)
-              </Text>
-            </TouchableOpacity>
+            <View>
+              <TouchableOpacity
+                style={[
+                  styles.videoPlaceholder,
+                  { backgroundColor: '#000000', borderColor: theme.primary },
+                ]}
+                onPress={() => {
+                  Linking.openURL(userProfile.showreelUrl).catch(() =>
+                    Alert.alert('Error', 'Unable to open showreel URL.')
+                  );
+                }}
+                activeOpacity={0.8}
+              >
+                <Text style={{ fontSize: 36 }}>🎬</Text>
+                <Text style={[styles.reelUrlLink, { color: theme.primary }]}>
+                  {userProfile.showreelUrl}
+                </Text>
+                <Text style={{ color: theme.textMuted, marginTop: 6, fontSize: 11 }}>
+                  Tap to preview externally (Vimeo / YouTube / Drive)
+                </Text>
+              </TouchableOpacity>
+              <View style={{ flexDirection: 'row', gap: 10, marginTop: 10 }}>
+                <TouchableOpacity
+                  style={[styles.smallReelBtn, { borderColor: theme.cardBorder, backgroundColor: theme.surface, flex: 1 }]}
+                  onPress={() => setIsEditing(true)}
+                >
+                  <Text style={[styles.smallReelBtnText, { color: theme.textSecondary }]}>✏ Edit Reel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.smallReelBtn, { borderColor: '#b91c1c', backgroundColor: '#14161a', flex: 1 }]}
+                  onPress={handleRemoveShowreel}
+                >
+                  <Text style={[styles.smallReelBtnText, { color: '#f87171' }]}>✕ Remove Reel</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
           ) : (
             <View style={[styles.emptyTabCard, { borderColor: theme.cardBorder }]}>
               <Text style={{ color: theme.textSecondary, fontSize: 13, fontStyle: 'italic', marginBottom: 12 }}>
@@ -1365,5 +1403,17 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     width: '100%',
+  },
+  smallReelBtn: {
+    paddingVertical: 9,
+    paddingHorizontal: 12,
+    borderRadius: 6,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  smallReelBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
   },
 });

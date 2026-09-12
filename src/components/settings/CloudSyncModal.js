@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -11,30 +11,86 @@ import {
   Alert,
 } from 'react-native';
 import { useTheme } from '../../context/ThemeContext';
+import { useAuth } from '../../context/AuthContext';
+import { syncNow, getPendingQueueCount, getLastSyncMetadata } from '../../services/syncService';
+
+const DEFAULT_SYNC_PREFS = {
+  autoSync: true,
+  wifiOnly: true,
+  chargingOnly: false,
+  syncMedia: true,
+  syncProdData: true,
+};
 
 export default function CloudSyncModal({ visible, onClose }) {
   const { theme } = useTheme();
+  const { currentUser } = useAuth();
 
   const [isSyncing, setIsSyncing] = useState(false);
-  const [lastSynced, setLastSynced] = useState('Today, 6:42 PM');
+  const [lastSynced, setLastSynced] = useState('Checking...');
   const [pendingChanges, setPendingChanges] = useState(0);
 
-  // Sync Preferences (Stored in local state / AsyncStorage)
-  const [autoSync, setAutoSync] = useState(true);
-  const [wifiOnly, setWifiOnly] = useState(true);
-  const [chargingOnly, setChargingOnly] = useState(false);
-  const [syncMedia, setSyncMedia] = useState(true);
-  const [syncProdData, setSyncProdData] = useState(true);
+  // Saved preferences & draft staging
+  const [savedPrefs, setSavedPrefs] = useState(DEFAULT_SYNC_PREFS);
+  const [draftPrefs, setDraftPrefs] = useState(DEFAULT_SYNC_PREFS);
 
-  const handleSyncNow = () => {
+  useEffect(() => {
+    if (visible) {
+      setDraftPrefs(savedPrefs);
+      getPendingQueueCount().then(setPendingChanges);
+      getLastSyncMetadata().then((ts) => {
+        if (ts) {
+          const date = new Date(ts);
+          setLastSynced(
+            `${date.toLocaleDateString([], { month: 'short', day: 'numeric' })}, ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+          );
+        } else {
+          setLastSynced('Never');
+        }
+      });
+    }
+  }, [visible]);
+
+  const handleSyncNow = async () => {
     setIsSyncing(true);
-    setTimeout(() => {
-      setIsSyncing(false);
-      setPendingChanges(0);
+    try {
+      const result = await syncNow({ userId: currentUser?.uid });
+      const count = await getPendingQueueCount();
+      setPendingChanges(count);
       const now = new Date();
-      setLastSynced(`Today, ${now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`);
-      Alert.alert('Cloud Sync Complete', 'All local production records are synchronized with Firebase.');
-    }, 1500);
+      setLastSynced(
+        `${now.toLocaleDateString([], { month: 'short', day: 'numeric' })}, ${now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+      );
+
+      if (result.syncedCount === 0 && result.failedCount === 0 && result.conflictCount === 0) {
+        Alert.alert('✓ Up to Date', 'All local production records are synchronized with Firebase.');
+      } else {
+        Alert.alert(
+          'Cloud Sync Complete',
+          `${result.syncedCount} item(s) synced.${result.failedCount > 0 ? `\n${result.failedCount} item(s) failed.` : ''}${result.conflictCount > 0 ? `\n${result.conflictCount} conflict(s) detected.` : ''}`
+        );
+      }
+    } catch (err) {
+      Alert.alert('Sync Notice', err.message || 'Unable to sync with Firebase.');
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  const handleSaveChanges = () => {
+    setSavedPrefs(draftPrefs);
+    Alert.alert('✓ Saved', 'Sync preferences have been updated.');
+    onClose();
+  };
+
+  const handleCancel = () => {
+    setDraftPrefs(savedPrefs);
+    onClose();
+  };
+
+  const handleRestoreDefaults = () => {
+    setDraftPrefs(DEFAULT_SYNC_PREFS);
+    Alert.alert('Defaults Restored', 'Sync preferences reset to factory defaults.');
   };
 
   return (
@@ -49,7 +105,7 @@ export default function CloudSyncModal({ visible, onClose }) {
                 Firebase synchronization & status
               </Text>
             </View>
-            <TouchableOpacity onPress={onClose} style={styles.closeBtn}>
+            <TouchableOpacity onPress={handleCancel} style={styles.closeBtn}>
               <Text style={{ color: theme.textMuted, fontSize: 16, fontWeight: 'bold' }}>✕</Text>
             </TouchableOpacity>
           </View>
@@ -108,8 +164,8 @@ export default function CloudSyncModal({ visible, onClose }) {
                   </Text>
                 </View>
                 <Switch
-                  value={autoSync}
-                  onValueChange={setAutoSync}
+                  value={draftPrefs.autoSync}
+                  onValueChange={(v) => setDraftPrefs((p) => ({ ...p, autoSync: v }))}
                   trackColor={{ false: '#242830', true: theme.primary }}
                   thumbColor="#ffffff"
                 />
@@ -125,8 +181,8 @@ export default function CloudSyncModal({ visible, onClose }) {
                   </Text>
                 </View>
                 <Switch
-                  value={wifiOnly}
-                  onValueChange={setWifiOnly}
+                  value={draftPrefs.wifiOnly}
+                  onValueChange={(v) => setDraftPrefs((p) => ({ ...p, wifiOnly: v }))}
                   trackColor={{ false: '#242830', true: theme.primary }}
                   thumbColor="#ffffff"
                 />
@@ -142,8 +198,8 @@ export default function CloudSyncModal({ visible, onClose }) {
                   </Text>
                 </View>
                 <Switch
-                  value={chargingOnly}
-                  onValueChange={setChargingOnly}
+                  value={draftPrefs.chargingOnly}
+                  onValueChange={(v) => setDraftPrefs((p) => ({ ...p, chargingOnly: v }))}
                   trackColor={{ false: '#242830', true: theme.primary }}
                   thumbColor="#ffffff"
                 />
@@ -159,8 +215,8 @@ export default function CloudSyncModal({ visible, onClose }) {
                   </Text>
                 </View>
                 <Switch
-                  value={syncMedia}
-                  onValueChange={setSyncMedia}
+                  value={draftPrefs.syncMedia}
+                  onValueChange={(v) => setDraftPrefs((p) => ({ ...p, syncMedia: v }))}
                   trackColor={{ false: '#242830', true: theme.primary }}
                   thumbColor="#ffffff"
                 />
@@ -176,17 +232,54 @@ export default function CloudSyncModal({ visible, onClose }) {
                   </Text>
                 </View>
                 <Switch
-                  value={syncProdData}
-                  onValueChange={setSyncProdData}
+                  value={draftPrefs.syncProdData}
+                  onValueChange={(v) => setDraftPrefs((p) => ({ ...p, syncProdData: v }))}
                   trackColor={{ false: '#242830', true: theme.primary }}
                   thumbColor="#ffffff"
                 />
               </View>
             </View>
 
-            <Text style={[styles.freeTierNotice, { color: theme.textMuted }]}>
+            {/* REALISTIC COMING SOON FEATURE */}
+            <Text style={[styles.sectionHeading, { color: theme.textSecondary, marginTop: 16 }]}>LOCAL ON-SET COLLABORATION</Text>
+            <View style={[styles.comingSoonCard, { backgroundColor: theme.background, borderColor: theme.cardBorder }]}>
+              <View style={styles.comingSoonHeader}>
+                <Text style={[styles.comingSoonTitle, { color: theme.text }]}>Peer-to-Peer On-Set Local Sync</Text>
+                <View style={styles.comingSoonBadge}>
+                  <Text style={styles.comingSoonBadgeText}>COMING SOON</Text>
+                </View>
+              </View>
+              <Text style={[styles.comingSoonDesc, { color: theme.textMuted }]}>
+                Real-time zero-cloud synchronization between production crew devices (Director, 1st AD, Script Supervisor, DIT) over local ad-hoc Wi-Fi or Teradek network without requiring internet connection.
+              </Text>
+            </View>
+
+            <Text style={[styles.freeTierNotice, { color: theme.textMuted, marginTop: 14 }]}>
               Firebase Spark plan: Live listeners are throttled to minimize reads and writes.
             </Text>
+
+            {/* Save / Cancel / Restore Defaults Bottom Controls */}
+            <View style={styles.footerControls}>
+              <View style={styles.saveCancelRow}>
+                <TouchableOpacity
+                  style={[styles.cancelBtn, { borderColor: theme.cardBorder }]}
+                  onPress={handleCancel}
+                >
+                  <Text style={[styles.cancelBtnText, { color: theme.textSecondary }]}>Cancel</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[styles.saveBtn, { backgroundColor: theme.primary }]}
+                  onPress={handleSaveChanges}
+                >
+                  <Text style={styles.saveBtnText}>Save Changes</Text>
+                </TouchableOpacity>
+              </View>
+
+              <TouchableOpacity style={styles.restoreBtn} onPress={handleRestoreDefaults}>
+                <Text style={[styles.restoreBtnText, { color: theme.textMuted }]}>↺ Restore Defaults</Text>
+              </TouchableOpacity>
+            </View>
           </ScrollView>
         </View>
       </View>
@@ -320,9 +413,83 @@ const styles = StyleSheet.create({
     height: 1,
     backgroundColor: '#242830',
   },
+  comingSoonCard: {
+    borderRadius: 12,
+    borderWidth: 1,
+    padding: 14,
+  },
+  comingSoonHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  comingSoonTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  comingSoonBadge: {
+    backgroundColor: '#3b82f620',
+    borderColor: '#3b82f6',
+    borderWidth: 1,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  comingSoonBadgeText: {
+    color: '#60a5fa',
+    fontSize: 9,
+    fontWeight: '900',
+    letterSpacing: 0.6,
+  },
+  comingSoonDesc: {
+    fontSize: 11,
+    lineHeight: 16,
+  },
   freeTierNotice: {
     fontSize: 11,
     textAlign: 'center',
-    marginTop: 8,
+  },
+  footerControls: {
+    marginTop: 24,
+    alignItems: 'center',
+  },
+  saveCancelRow: {
+    flexDirection: 'row',
+    width: '100%',
+    marginBottom: 10,
+  },
+  cancelBtn: {
+    flex: 1,
+    height: 44,
+    borderRadius: 8,
+    borderWidth: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 8,
+  },
+  cancelBtnText: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  saveBtn: {
+    flex: 1,
+    height: 44,
+    borderRadius: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginLeft: 8,
+  },
+  saveBtnText: {
+    color: '#000000',
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  restoreBtn: {
+    paddingVertical: 6,
+  },
+  restoreBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
   },
 });

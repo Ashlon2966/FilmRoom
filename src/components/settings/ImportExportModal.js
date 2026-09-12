@@ -7,9 +7,20 @@ import {
   TouchableOpacity,
   ScrollView,
   Alert,
+  ActivityIndicator,
 } from 'react-native';
+import * as DocumentPicker from 'expo-document-picker';
+import { collection, query, where, getDocs } from 'firebase/firestore';
+import { db } from '../../../firebaseConfig';
 import { useTheme } from '../../context/ThemeContext';
-import { exportUserDataToDrive, importUserDataFromFile } from '../../services/backupService';
+import { useAuth } from '../../context/AuthContext';
+import {
+  exportFullFilmRoomBackup,
+  exportProjectPackage,
+  validateBackupFile,
+  executeImport,
+  restoreCloudDataToLocal,
+} from '../../services/backupService';
 
 const PROJECT_PACKAGE_CATEGORIES = [
   { id: 'details', label: 'Project details', defaultSelected: true },
@@ -24,9 +35,12 @@ const PROJECT_PACKAGE_CATEGORIES = [
 
 export default function ImportExportModal({ visible, onClose }) {
   const { theme } = useTheme();
+  const { currentUser } = useAuth();
 
   // Mode: 'MENU' | 'IMPORT_PREVIEW' | 'PROJECT_CATEGORIES'
   const [viewMode, setViewMode] = useState('MENU');
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [importPreviewData, setImportPreviewData] = useState(null);
 
   // Category selections
   const [selectedCategories, setSelectedCategories] = useState({
@@ -48,24 +62,104 @@ export default function ImportExportModal({ visible, onClose }) {
   };
 
   const handleExportFull = async () => {
+    setIsProcessing(true);
     try {
-      await exportUserDataToDrive();
+      await exportFullFilmRoomBackup(currentUser?.uid);
+    } catch (e) {
+      Alert.alert('Export Error', e.message);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleExportProjectPackage = async () => {
+    if (!currentUser?.uid) return;
+    try {
+      const q = query(
+        collection(db, 'rooms'),
+        where('memberUids', 'array-contains', currentUser.uid)
+      );
+      const snap = await getDocs(q);
+      if (snap.empty) {
+        Alert.alert('No Rooms Found', 'You do not have any active production rooms to export.');
+        return;
+      }
+
+      const userRooms = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      if (userRooms.length === 1) {
+        await exportProjectPackage(userRooms[0].id);
+      } else {
+        Alert.alert(
+          'Select Room to Export',
+          'Choose a production room for the project package:',
+          [
+            ...userRooms.slice(0, 4).map((r) => ({
+              text: r.title,
+              onPress: () => exportProjectPackage(r.id),
+            })),
+            { text: 'Cancel', style: 'cancel' },
+          ]
+        );
+      }
     } catch (e) {
       Alert.alert('Export Error', e.message);
     }
   };
 
-  const handleTriggerImport = async () => {
-    setViewMode('IMPORT_PREVIEW');
+  const handlePickImportFile = async () => {
+    try {
+      const res = await DocumentPicker.getDocumentAsync({
+        type: 'application/json',
+        copyToCacheDirectory: true,
+      });
+
+      if (res.canceled || !res.assets || res.assets.length === 0) return;
+
+      const file = res.assets[0];
+      const preview = await validateBackupFile(file.uri);
+
+      if (!preview.isValid) {
+        Alert.alert('Invalid Backup', preview.error || 'The selected file is not a valid FilmRoom backup.');
+        return;
+      }
+
+      setImportPreviewData(preview);
+      setViewMode('IMPORT_PREVIEW');
+    } catch (err) {
+      Alert.alert('Import Notice', err.message || 'Could not read backup file.');
+    }
+  };
+
+  const handleRestoreCloudData = async () => {
+    setIsProcessing(true);
+    try {
+      const count = await restoreCloudDataToLocal(currentUser?.uid);
+      Alert.alert(
+        '✓ Cloud Data Restored',
+        `Restored ${count} production records from Firestore into your local SQLite cache.`
+      );
+    } catch (e) {
+      Alert.alert('Restore Notice', e.message);
+    } finally {
+      setIsProcessing(false);
+    }
   };
 
   const handleConfirmImport = async () => {
+    if (!importPreviewData?.parsedData || !currentUser?.uid) return;
+    setIsProcessing(true);
     try {
-      await importUserDataFromFile();
-      Alert.alert('✓ Import Complete', 'Selected project data imported successfully.');
+      await executeImport({
+        parsedData: importPreviewData.parsedData,
+        conflictResolutions: {},
+        userId: currentUser.uid,
+      });
+      Alert.alert('✓ Import Complete', 'Selected backup records have been imported successfully.');
       onClose();
     } catch (e) {
       Alert.alert('Import Error', e.message);
+    } finally {
+      setIsProcessing(false);
     }
   };
 
@@ -98,7 +192,7 @@ export default function ImportExportModal({ visible, onClose }) {
               <>
                 <Text style={[styles.sectionTitle, { color: theme.textSecondary }]}>EXPORT DATA</Text>
                 <View style={[styles.menuGroup, { backgroundColor: theme.background, borderColor: theme.cardBorder }]}>
-                  <TouchableOpacity style={styles.menuRow} onPress={handleExportFull} activeOpacity={0.7}>
+                  <TouchableOpacity style={styles.menuRow} onPress={handleExportFull} activeOpacity={0.7} disabled={isProcessing}>
                     <Text style={styles.menuIcon}>📦</Text>
                     <View style={styles.menuInfo}>
                       <Text style={[styles.menuLabel, { color: theme.text }]}>Entire FilmRoom Data</Text>
@@ -113,8 +207,9 @@ export default function ImportExportModal({ visible, onClose }) {
 
                   <TouchableOpacity
                     style={styles.menuRow}
-                    onPress={() => Alert.alert('Export Project', 'Choose an active production room to export as a standalone package.')}
+                    onPress={handleExportProjectPackage}
                     activeOpacity={0.7}
+                    disabled={isProcessing}
                   >
                     <Text style={styles.menuIcon}>🎬</Text>
                     <View style={styles.menuInfo}>
@@ -125,28 +220,11 @@ export default function ImportExportModal({ visible, onClose }) {
                     </View>
                     <Text style={[styles.menuArrow, { color: theme.primary }]}>→</Text>
                   </TouchableOpacity>
-
-                  <View style={styles.divider} />
-
-                  <TouchableOpacity
-                    style={styles.menuRow}
-                    onPress={() => Alert.alert('Export Profile', 'Exporting public professional dossier and portfolio links.')}
-                    activeOpacity={0.7}
-                  >
-                    <Text style={styles.menuIcon}>👤</Text>
-                    <View style={styles.menuInfo}>
-                      <Text style={[styles.menuLabel, { color: theme.text }]}>Professional Dossier</Text>
-                      <Text style={[styles.menuDesc, { color: theme.textMuted }]}>
-                        Credits, equipment kit list, and bio summary
-                      </Text>
-                    </View>
-                    <Text style={[styles.menuArrow, { color: theme.primary }]}>→</Text>
-                  </TouchableOpacity>
                 </View>
 
-                <Text style={[styles.sectionTitle, { color: theme.textSecondary, marginTop: 18 }]}>IMPORT DATA</Text>
+                <Text style={[styles.sectionTitle, { color: theme.textSecondary, marginTop: 18 }]}>IMPORT & RESTORE DATA</Text>
                 <View style={[styles.menuGroup, { backgroundColor: theme.background, borderColor: theme.cardBorder }]}>
-                  <TouchableOpacity style={styles.menuRow} onPress={handleTriggerImport} activeOpacity={0.7}>
+                  <TouchableOpacity style={styles.menuRow} onPress={handlePickImportFile} activeOpacity={0.7} disabled={isProcessing}>
                     <Text style={styles.menuIcon}>📁</Text>
                     <View style={styles.menuInfo}>
                       <Text style={[styles.menuLabel, { color: theme.text }]}>Import from Device</Text>
@@ -159,18 +237,12 @@ export default function ImportExportModal({ visible, onClose }) {
 
                   <View style={styles.divider} />
 
-                  <TouchableOpacity
-                    style={styles.menuRow}
-                    onPress={() => {
-                      setViewMode('PROJECT_CATEGORIES');
-                    }}
-                    activeOpacity={0.7}
-                  >
-                    <Text style={styles.menuIcon}>🗂</Text>
+                  <TouchableOpacity style={styles.menuRow} onPress={handleRestoreCloudData} activeOpacity={0.7} disabled={isProcessing}>
+                    <Text style={styles.menuIcon}>☁️</Text>
                     <View style={styles.menuInfo}>
-                      <Text style={[styles.menuLabel, { color: theme.text }]}>Selective Project Import</Text>
+                      <Text style={[styles.menuLabel, { color: theme.text }]}>Restore Cloud Data</Text>
                       <Text style={[styles.menuDesc, { color: theme.textMuted }]}>
-                        Choose categories to merge into your studio
+                        Restore your rooms and calls from Firestore into local SQLite cache
                       </Text>
                     </View>
                     <Text style={[styles.menuArrow, { color: theme.primary }]}>→</Text>
@@ -182,34 +254,60 @@ export default function ImportExportModal({ visible, onClose }) {
             {/* ── MODE: IMPORT PREVIEW (Conflict Management) ── */}
             {viewMode === 'IMPORT_PREVIEW' && (
               <View style={styles.previewContainer}>
+                {importPreviewData?.packageType && (
+                  <View style={{ marginBottom: 12, paddingHorizontal: 12, paddingVertical: 8, backgroundColor: theme.primary + '15', borderRadius: 8 }}>
+                    <Text style={{ color: theme.primary, fontSize: 12, fontWeight: '700' }}>
+                      PACKAGE: {importPreviewData.packageType.replace('_', ' ')} (v{importPreviewData.version || '1.0'})
+                    </Text>
+                  </View>
+                )}
+
                 <View style={[styles.previewCard, { backgroundColor: theme.background, borderColor: theme.cardBorder }]}>
                   <View style={styles.previewStatRow}>
                     <Text style={[styles.previewStatLabel, { color: theme.textSecondary }]}>Projects</Text>
-                    <Text style={[styles.previewStatValue, { color: theme.text }]}>3</Text>
+                    <Text style={[styles.previewStatValue, { color: theme.text }]}>
+                      {importPreviewData?.counts?.projects ?? 0}
+                    </Text>
                   </View>
                   <View style={styles.divider} />
 
                   <View style={styles.previewStatRow}>
                     <Text style={[styles.previewStatLabel, { color: theme.textSecondary }]}>People</Text>
-                    <Text style={[styles.previewStatValue, { color: theme.text }]}>24</Text>
+                    <Text style={[styles.previewStatValue, { color: theme.text }]}>
+                      {importPreviewData?.counts?.people ?? 0}
+                    </Text>
+                  </View>
+                  <View style={styles.divider} />
+
+                  <View style={styles.previewStatRow}>
+                    <Text style={[styles.previewStatLabel, { color: theme.textSecondary }]}>Crew Calls</Text>
+                    <Text style={[styles.previewStatValue, { color: theme.text }]}>
+                      {importPreviewData?.counts?.crewCalls ?? 0}
+                    </Text>
                   </View>
                   <View style={styles.divider} />
 
                   <View style={styles.previewStatRow}>
                     <Text style={[styles.previewStatLabel, { color: theme.textSecondary }]}>Documents</Text>
-                    <Text style={[styles.previewStatValue, { color: theme.text }]}>18</Text>
+                    <Text style={[styles.previewStatValue, { color: theme.text }]}>
+                      {importPreviewData?.counts?.documents ?? 0}
+                    </Text>
                   </View>
                   <View style={styles.divider} />
 
                   <View style={styles.previewStatRow}>
                     <Text style={[styles.previewStatLabel, { color: theme.textSecondary }]}>Media references</Text>
-                    <Text style={[styles.previewStatValue, { color: theme.text }]}>12</Text>
+                    <Text style={[styles.previewStatValue, { color: theme.text }]}>
+                      {importPreviewData?.counts?.mediaRefs ?? 0}
+                    </Text>
                   </View>
                   <View style={styles.divider} />
 
                   <View style={styles.previewStatRow}>
                     <Text style={[styles.previewStatLabel, { color: theme.primary }]}>Conflicts</Text>
-                    <Text style={[styles.previewStatValue, { color: theme.primary }]}>0</Text>
+                    <Text style={[styles.previewStatValue, { color: theme.primary }]}>
+                      {importPreviewData?.conflicts?.length ?? 0}
+                    </Text>
                   </View>
                 </View>
 

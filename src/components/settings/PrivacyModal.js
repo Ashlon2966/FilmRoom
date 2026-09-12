@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -17,26 +17,49 @@ const VISIBILITY_MODES = [
   { key: 'PRIVATE', label: 'Private', desc: 'Hidden from discovery; visible only via direct project link' },
 ];
 
+const DEFAULT_PRIVACY = {
+  visibility: 'PUBLIC',
+  hidePhone: true,
+  hideEmail: true,
+  allowInquiries: true,
+  allowConnections: true,
+  showAvailability: true,
+  showLocation: true,
+  showProjects: true,
+  showPortfolio: true,
+};
+
 export default function PrivacyModal({ visible, onClose, navigation }) {
   const { theme } = useTheme();
 
-  const [visibility, setVisibility] = useState('PUBLIC');
+  // Saved privacy settings & draft staging
+  const [savedSettings, setSavedSettings] = useState(DEFAULT_PRIVACY);
+  const [draftSettings, setDraftSettings] = useState(DEFAULT_PRIVACY);
 
-  // Contact Information Toggles
-  const [hidePhone, setHidePhone] = useState(true);
-  const [hideEmail, setHideEmail] = useState(true);
-  const [allowInquiries, setAllowInquiries] = useState(true);
-  const [allowConnections, setAllowConnections] = useState(true);
+  useEffect(() => {
+    if (visible) {
+      setDraftSettings(savedSettings);
+    }
+  }, [visible]);
 
-  // Professional Info Toggles
-  const [showAvailability, setShowAvailability] = useState(true);
-  const [showLocation, setShowLocation] = useState(true);
-  const [showProjects, setShowProjects] = useState(true);
-  const [showPortfolio, setShowPortfolio] = useState(true);
+  const updateDraft = (key, value) => {
+    setDraftSettings((prev) => ({ ...prev, [key]: value }));
+  };
 
   const handleSave = () => {
+    setSavedSettings(draftSettings);
     Alert.alert('✓ Privacy Updated', 'Your profile visibility and contact privacy settings have been saved.');
     onClose();
+  };
+
+  const handleCancel = () => {
+    setDraftSettings(savedSettings);
+    onClose();
+  };
+
+  const handleRestoreDefaults = () => {
+    setDraftSettings(DEFAULT_PRIVACY);
+    Alert.alert('Defaults Restored', 'Privacy settings reset to factory defaults.');
   };
 
   return (
@@ -51,7 +74,7 @@ export default function PrivacyModal({ visible, onClose, navigation }) {
                 Identity, contact protection & visibility
               </Text>
             </View>
-            <TouchableOpacity onPress={onClose} style={styles.closeBtn}>
+            <TouchableOpacity onPress={handleCancel} style={styles.closeBtn}>
               <Text style={{ color: theme.textMuted, fontSize: 16, fontWeight: 'bold' }}>✕</Text>
             </TouchableOpacity>
           </View>
@@ -61,13 +84,13 @@ export default function PrivacyModal({ visible, onClose, navigation }) {
             <Text style={[styles.sectionHeading, { color: theme.textSecondary }]}>PROFILE VISIBILITY</Text>
             <View style={[styles.settingGroup, { backgroundColor: theme.background, borderColor: theme.cardBorder }]}>
               {VISIBILITY_MODES.map((mode, index) => {
-                const isSelected = visibility === mode.key;
+                const isSelected = draftSettings.visibility === mode.key;
                 return (
                   <View key={mode.key}>
                     {index > 0 && <View style={styles.divider} />}
                     <TouchableOpacity
                       style={styles.radioRow}
-                      onPress={() => setVisibility(mode.key)}
+                      onPress={() => updateDraft('visibility', mode.key)}
                       activeOpacity={0.7}
                     >
                       <View style={[styles.radioCircle, { borderColor: isSelected ? theme.primary : theme.textMuted }]}>
@@ -96,8 +119,8 @@ export default function PrivacyModal({ visible, onClose, navigation }) {
                   </Text>
                 </View>
                 <Switch
-                  value={hidePhone}
-                  onValueChange={setHidePhone}
+                  value={draftSettings.hidePhone}
+                  onValueChange={(v) => updateDraft('hidePhone', v)}
                   trackColor={{ false: '#242830', true: theme.primary }}
                   thumbColor="#ffffff"
                 />
@@ -113,8 +136,8 @@ export default function PrivacyModal({ visible, onClose, navigation }) {
                   </Text>
                 </View>
                 <Switch
-                  value={hideEmail}
-                  onValueChange={setHideEmail}
+                  value={draftSettings.hideEmail}
+                  onValueChange={(v) => updateDraft('hideEmail', v)}
                   trackColor={{ false: '#242830', true: theme.primary }}
                   thumbColor="#ffffff"
                 />
@@ -130,8 +153,8 @@ export default function PrivacyModal({ visible, onClose, navigation }) {
                   </Text>
                 </View>
                 <Switch
-                  value={allowInquiries}
-                  onValueChange={setAllowInquiries}
+                  value={draftSettings.allowInquiries}
+                  onValueChange={(v) => updateDraft('allowInquiries', v)}
                   trackColor={{ false: '#242830', true: theme.primary }}
                   thumbColor="#ffffff"
                 />
@@ -147,8 +170,8 @@ export default function PrivacyModal({ visible, onClose, navigation }) {
                   </Text>
                 </View>
                 <Switch
-                  value={allowConnections}
-                  onValueChange={setAllowConnections}
+                  value={draftSettings.allowConnections}
+                  onValueChange={(v) => updateDraft('allowConnections', v)}
                   trackColor={{ false: '#242830', true: theme.primary }}
                   thumbColor="#ffffff"
                 />
@@ -166,8 +189,8 @@ export default function PrivacyModal({ visible, onClose, navigation }) {
                   <Text style={[styles.switchDesc, { color: theme.textMuted }]}>Display Available / Busy / Date pill</Text>
                 </View>
                 <Switch
-                  value={showAvailability}
-                  onValueChange={setShowAvailability}
+                  value={draftSettings.showAvailability}
+                  onValueChange={(v) => updateDraft('showAvailability', v)}
                   trackColor={{ false: '#242830', true: theme.primary }}
                   thumbColor="#ffffff"
                 />
@@ -181,8 +204,8 @@ export default function PrivacyModal({ visible, onClose, navigation }) {
                   <Text style={[styles.switchDesc, { color: theme.textMuted }]}>Display primary production market</Text>
                 </View>
                 <Switch
-                  value={showLocation}
-                  onValueChange={setShowLocation}
+                  value={draftSettings.showLocation}
+                  onValueChange={(v) => updateDraft('showLocation', v)}
                   trackColor={{ false: '#242830', true: theme.primary }}
                   thumbColor="#ffffff"
                 />
@@ -196,8 +219,8 @@ export default function PrivacyModal({ visible, onClose, navigation }) {
                   <Text style={[styles.switchDesc, { color: theme.textMuted }]}>List active credits and affiliations</Text>
                 </View>
                 <Switch
-                  value={showProjects}
-                  onValueChange={setShowProjects}
+                  value={draftSettings.showProjects}
+                  onValueChange={(v) => updateDraft('showProjects', v)}
                   trackColor={{ false: '#242830', true: theme.primary }}
                   thumbColor="#ffffff"
                 />
@@ -211,12 +234,26 @@ export default function PrivacyModal({ visible, onClose, navigation }) {
                   <Text style={[styles.switchDesc, { color: theme.textMuted }]}>Showreel and IMDb links</Text>
                 </View>
                 <Switch
-                  value={showPortfolio}
-                  onValueChange={setShowPortfolio}
+                  value={draftSettings.showPortfolio}
+                  onValueChange={(v) => updateDraft('showPortfolio', v)}
                   trackColor={{ false: '#242830', true: theme.primary }}
                   thumbColor="#ffffff"
                 />
               </View>
+            </View>
+
+            {/* REALISTIC COMING SOON FEATURE */}
+            <Text style={[styles.sectionHeading, { color: theme.textSecondary, marginTop: 18 }]}>SECURITY & RIGHTS PROTECTION</Text>
+            <View style={[styles.comingSoonCard, { backgroundColor: theme.background, borderColor: theme.cardBorder }]}>
+              <View style={styles.comingSoonHeader}>
+                <Text style={[styles.comingSoonTitle, { color: theme.text }]}>Forensic Watermarked Screeners</Text>
+                <View style={styles.comingSoonBadge}>
+                  <Text style={styles.comingSoonBadgeText}>COMING SOON</Text>
+                </View>
+              </View>
+              <Text style={[styles.comingSoonDesc, { color: theme.textMuted }]}>
+                Dynamic forensic burnt-in viewer email, IP, and timestamp overlay on all showreel views and script PDF downloads to prevent unauthorized leaks and protect agency clients.
+              </Text>
             </View>
 
             {/* Safety Actions */}
@@ -225,8 +262,10 @@ export default function PrivacyModal({ visible, onClose, navigation }) {
               <TouchableOpacity
                 style={styles.actionLinkRow}
                 onPress={() => {
-                  onClose();
-                  if (navigation) navigation.navigate('BlockedUsers');
+                  Alert.alert(
+                    'Blocked Users',
+                    'To unblock or manage blocked filmmakers, visit their profile or open Direct Messages. Blocked users cannot send requests or messages to you.'
+                  );
                 }}
               >
                 <Text style={[styles.actionLinkLabel, { color: theme.text }]}>🚫 Manage Blocked Users</Text>
@@ -244,13 +283,28 @@ export default function PrivacyModal({ visible, onClose, navigation }) {
               </TouchableOpacity>
             </View>
 
-            <TouchableOpacity
-              style={[styles.saveBtn, { backgroundColor: theme.primary }]}
-              onPress={handleSave}
-              activeOpacity={0.8}
-            >
-              <Text style={styles.saveBtnText}>Save Privacy Settings</Text>
-            </TouchableOpacity>
+            {/* Save / Cancel / Restore Defaults Bottom Controls */}
+            <View style={styles.footerControls}>
+              <View style={styles.saveCancelRow}>
+                <TouchableOpacity
+                  style={[styles.cancelBtn, { borderColor: theme.cardBorder }]}
+                  onPress={handleCancel}
+                >
+                  <Text style={[styles.cancelBtnText, { color: theme.textSecondary }]}>Cancel</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[styles.saveBtn, { backgroundColor: theme.primary }]}
+                  onPress={handleSave}
+                >
+                  <Text style={styles.saveBtnText}>Save Changes</Text>
+                </TouchableOpacity>
+              </View>
+
+              <TouchableOpacity style={styles.restoreBtn} onPress={handleRestoreDefaults}>
+                <Text style={[styles.restoreBtnText, { color: theme.textMuted }]}>↺ Restore Defaults</Text>
+              </TouchableOpacity>
+            </View>
           </ScrollView>
         </View>
       </View>
@@ -357,6 +411,40 @@ const styles = StyleSheet.create({
     height: 1,
     backgroundColor: '#242830',
   },
+  comingSoonCard: {
+    borderRadius: 12,
+    borderWidth: 1,
+    padding: 14,
+    marginBottom: 10,
+  },
+  comingSoonHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  comingSoonTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  comingSoonBadge: {
+    backgroundColor: '#3b82f620',
+    borderColor: '#3b82f6',
+    borderWidth: 1,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  comingSoonBadgeText: {
+    color: '#60a5fa',
+    fontSize: 9,
+    fontWeight: '900',
+    letterSpacing: 0.6,
+  },
+  comingSoonDesc: {
+    fontSize: 11,
+    lineHeight: 16,
+  },
   actionLinkRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -371,16 +459,46 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: 'bold',
   },
-  saveBtn: {
-    height: 46,
-    borderRadius: 10,
+  footerControls: {
+    marginTop: 20,
+    alignItems: 'center',
+  },
+  saveCancelRow: {
+    flexDirection: 'row',
+    width: '100%',
+    marginBottom: 10,
+  },
+  cancelBtn: {
+    flex: 1,
+    height: 44,
+    borderRadius: 8,
+    borderWidth: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    marginTop: 20,
+    marginRight: 8,
+  },
+  cancelBtnText: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  saveBtn: {
+    flex: 1,
+    height: 44,
+    borderRadius: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginLeft: 8,
   },
   saveBtnText: {
     color: '#000000',
     fontSize: 14,
     fontWeight: '800',
+  },
+  restoreBtn: {
+    paddingVertical: 6,
+  },
+  restoreBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
   },
 });

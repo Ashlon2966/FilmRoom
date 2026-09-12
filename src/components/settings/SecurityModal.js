@@ -183,8 +183,14 @@ export default function SecurityModal({ visible, onClose, navigation }) {
               <TouchableOpacity
                 style={styles.actionRow}
                 onPress={() => {
-                  onClose();
-                  if (navigation) navigation.navigate('BlockedUsers');
+                  if (blockedCount === 0) {
+                    Alert.alert('Blocked Users', 'You have not blocked any filmmakers. You can block any filmmaker from their direct message or profile.');
+                  } else {
+                    Alert.alert(
+                      'Blocked Users',
+                      `You currently have ${blockedCount} blocked filmmaker account(s). You can unblock filmmakers directly from their profiles or direct messages.`
+                    );
+                  }
                 }}
                 activeOpacity={0.7}
               >

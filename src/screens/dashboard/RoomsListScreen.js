@@ -21,7 +21,11 @@ import { useRoom } from '../../context/RoomContext';
 import { useTheme } from '../../context/ThemeContext';
 import ProductionCallCard from '../../components/ProductionCallCard';
 import SubmitInterestModal from '../../components/SubmitInterestModal';
+import SubmitReelModal from '../../components/SubmitReelModal';
 import PostProductionCallModal from '../../components/PostProductionCallModal';
+import EditRoomModal from '../../components/EditRoomModal';
+import NotificationCenterModal from '../../components/NotificationCenterModal';
+import { streamNotifications } from '../../services/notificationService';
 
 export default function RoomsListScreen({ navigation }) {
   const { currentUser, userProfile } = useAuth();
@@ -37,6 +41,21 @@ export default function RoomsListScreen({ navigation }) {
   const [submitInterestVisible, setSubmitInterestVisible] = useState(false);
   const [selectedCall, setSelectedCall] = useState(null);
   const [postCallModalVisible, setPostCallModalVisible] = useState(false);
+  const [roomToEdit, setRoomToEdit] = useState(null);
+  const [callToEdit, setCallToEdit] = useState(null);
+  const [notificationsVisible, setNotificationsVisible] = useState(false);
+  const [notifications, setNotifications] = useState([]);
+
+  // Stream in-app notifications
+  useEffect(() => {
+    if (!currentUser?.uid) return;
+    const unsub = streamNotifications(currentUser.uid, (list) => {
+      setNotifications(list);
+    });
+    return () => unsub();
+  }, [currentUser?.uid]);
+
+  const unreadNotificationCount = notifications.filter((n) => !n.isRead).length;
 
   // Stream user's production rooms (Guarded by currentUser)
   useEffect(() => {
@@ -92,7 +111,7 @@ export default function RoomsListScreen({ navigation }) {
   };
 
   const handleExpressInterest = (call) => {
-    if (!currentUser?.uid) {
+    if (!currentUser) {
       Alert.alert('Sign In Required', 'Please sign in to submit interest.');
       return;
     }
@@ -114,21 +133,44 @@ export default function RoomsListScreen({ navigation }) {
             THE <Text style={{ color: theme?.primary || '#f5a623' }}>BOARD</Text>
           </Text>
 
-          {activeSegment === 'ROOMS' ? (
+          <View style={styles.headerRightRow}>
             <TouchableOpacity
-              style={[styles.actionBtn, { backgroundColor: theme?.primary || '#f5a623' }]}
-              onPress={() => navigation.navigate('CreateRoom')}
+              style={[
+                styles.bellBtn,
+                {
+                  backgroundColor: theme?.card || '#181b1f',
+                  borderColor: theme?.cardBorder || '#242830',
+                },
+              ]}
+              onPress={() => setNotificationsVisible(true)}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
             >
-              <Text style={styles.actionBtnText}>+ New Room</Text>
+              <Text style={{ fontSize: 16 }}>🔔</Text>
+              {unreadNotificationCount > 0 && (
+                <View style={[styles.bellBadge, { backgroundColor: theme?.primary || '#f5a623' }]}>
+                  <Text style={styles.bellBadgeText}>
+                    {unreadNotificationCount > 9 ? '9+' : unreadNotificationCount}
+                  </Text>
+                </View>
+              )}
             </TouchableOpacity>
-          ) : (
-            <TouchableOpacity
-              style={[styles.actionBtn, { backgroundColor: theme?.primary || '#f5a623' }]}
-              onPress={() => setPostCallModalVisible(true)}
-            >
-              <Text style={styles.actionBtnText}>+ Post Crew Call</Text>
-            </TouchableOpacity>
-          )}
+
+            {activeSegment === 'ROOMS' ? (
+              <TouchableOpacity
+                style={[styles.actionBtn, { backgroundColor: theme?.primary || '#f5a623' }]}
+                onPress={() => navigation.navigate('CreateRoom')}
+              >
+                <Text style={styles.actionBtnText}>+ New Room</Text>
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity
+                style={[styles.actionBtn, { backgroundColor: theme?.primary || '#f5a623' }]}
+                onPress={() => setPostCallModalVisible(true)}
+              >
+                <Text style={styles.actionBtnText}>+ Post Crew Call</Text>
+              </TouchableOpacity>
+            )}
+          </View>
         </View>
 
         {/* Segmented Toggle: Production Rooms vs Public Crew Calls */}
@@ -227,6 +269,22 @@ export default function RoomsListScreen({ navigation }) {
                 <Text style={[styles.enterText, { color: theme?.primary || '#f5a623' }]}>
                   Enter Digital Slate & Pipeline ➔
                 </Text>
+                {(item.creatorId === currentUser?.uid ||
+                  item.members?.[currentUser?.uid]?.roomAccess === 'Owner' ||
+                  item.members?.[currentUser?.uid]?.roomAccess === 'Manager') && (
+                  <TouchableOpacity
+                    style={[styles.editBadgeBtn, { backgroundColor: theme?.surface || '#121417', borderColor: theme?.cardBorder || '#242830' }]}
+                    onPress={(e) => {
+                      e.stopPropagation();
+                      setRoomToEdit(item);
+                    }}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={[styles.editBadgeText, { color: theme?.textSecondary || '#9ca3af' }]}>
+                      ⚙️ Edit
+                    </Text>
+                  </TouchableOpacity>
+                )}
               </View>
             </TouchableOpacity>
           )}
@@ -250,6 +308,7 @@ export default function RoomsListScreen({ navigation }) {
             <ProductionCallCard
               project={item}
               onExpressInterest={() => handleExpressInterest(item)}
+              onEditCall={() => setCallToEdit(item)}
             />
           )}
           contentContainerStyle={{ padding: 16, paddingBottom: 90 }}
@@ -268,7 +327,7 @@ export default function RoomsListScreen({ navigation }) {
 
       {/* Flow B Modal for Crew Call Submissions */}
       {selectedCall && (
-        <SubmitInterestModal
+        <SubmitReelModal
           visible={submitInterestVisible}
           targetLead={{
             uid: selectedCall.createdBy,
@@ -289,11 +348,33 @@ export default function RoomsListScreen({ navigation }) {
         />
       )}
 
-      {/* Modal to Post New Crew Call to The Board */}
+      {/* Modal to Post or Edit Crew Call on The Board */}
       <PostProductionCallModal
-        visible={postCallModalVisible}
-        onClose={() => setPostCallModalVisible(false)}
-        onPublished={() => setPostCallModalVisible(false)}
+        visible={postCallModalVisible || !!callToEdit}
+        callToEdit={callToEdit}
+        onClose={() => {
+          setPostCallModalVisible(false);
+          setCallToEdit(null);
+        }}
+        onPublished={() => {
+          setPostCallModalVisible(false);
+          setCallToEdit(null);
+        }}
+      />
+
+      {/* Edit Production Room Modal */}
+      <EditRoomModal
+        visible={!!roomToEdit}
+        roomId={roomToEdit?.id}
+        roomData={roomToEdit}
+        onClose={() => setRoomToEdit(null)}
+      />
+
+      {/* In-App Notification Center */}
+      <NotificationCenterModal
+        visible={notificationsVisible}
+        onClose={() => setNotificationsVisible(false)}
+        navigation={navigation}
       />
     </View>
   );
@@ -312,6 +393,36 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+  },
+  headerRightRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  bellBtn: {
+    paddingHorizontal: 8,
+    paddingVertical: 7,
+    borderRadius: 8,
+    borderWidth: 1,
+    position: 'relative',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  bellBadge: {
+    position: 'absolute',
+    top: -4,
+    right: -4,
+    borderRadius: 9,
+    minWidth: 18,
+    height: 18,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 3,
+  },
+  bellBadgeText: {
+    color: '#000000',
+    fontSize: 10,
+    fontWeight: '800',
   },
   headerTitle: {
     fontSize: 22,
@@ -377,10 +488,23 @@ const styles = StyleSheet.create({
   },
   enterRow: {
     marginTop: 10,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
   },
   enterText: {
     fontSize: 12,
     fontWeight: '800',
+  },
+  editBadgeBtn: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 4,
+    borderWidth: 1,
+  },
+  editBadgeText: {
+    fontSize: 11,
+    fontWeight: '700',
   },
   emptyCard: {
     padding: 30,

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -8,40 +8,101 @@ import {
   ScrollView,
   Switch,
   Alert,
+  Platform,
 } from 'react-native';
+import DateTimePicker from '@react-native-community/datetimepicker';
 import { useTheme } from '../../context/ThemeContext';
+
+const DEFAULT_NOTIFS = {
+  reqContact: true,
+  reqAccepted: true,
+  reqDeclined: true,
+  prodCrewCall: true,
+  prodInvite: true,
+  prodChanges: true,
+  msgDirect: true,
+  msgConnection: true,
+  syncDone: false,
+  syncFail: true,
+  syncImport: true,
+  quietHoursEnabled: false,
+  quietFromHour: '22:00',
+  quietToHour: '08:00',
+};
+
+const TIME_OPTIONS = [
+  '20:00', '21:00', '22:00', '23:00', '00:00', '01:00',
+  '06:00', '07:00', '08:00', '09:00', '10:00',
+];
+
+const formatTimeDisplay = (timeStr) => {
+  if (!timeStr) return '';
+  const [h, m] = timeStr.split(':').map(Number);
+  const period = h >= 12 ? 'PM' : 'AM';
+  const displayHours = h % 12 || 12;
+  const displayMinutes = String(m || 0).padStart(2, '0');
+  return `${displayHours}:${displayMinutes} ${period}`;
+};
+
+const parseTimeString = (timeStr) => {
+  const d = new Date();
+  if (!timeStr) return d;
+  const [h, m] = timeStr.split(':').map(Number);
+  d.setHours(h || 0, m || 0, 0, 0);
+  return d;
+};
 
 export default function NotificationsModal({ visible, onClose }) {
   const { theme } = useTheme();
 
-  // Requests alerts
-  const [reqContact, setReqContact] = useState(true);
-  const [reqAccepted, setReqAccepted] = useState(true);
-  const [reqDeclined, setReqDeclined] = useState(true);
+  // Saved preferences & draft staging
+  const [savedSettings, setSavedSettings] = useState(DEFAULT_NOTIFS);
+  const [draftSettings, setDraftSettings] = useState(DEFAULT_NOTIFS);
+  const [timePickerTarget, setTimePickerTarget] = useState(null); // 'FROM' | 'TO' | null
 
-  // Production alerts
-  const [prodCrewCall, setProdCrewCall] = useState(true);
-  const [prodInvite, setProdInvite] = useState(true);
-  const [prodChanges, setProdChanges] = useState(true);
+  useEffect(() => {
+    if (visible) {
+      setDraftSettings(savedSettings);
+    }
+  }, [visible]);
 
-  // Messages alerts
-  const [msgDirect, setMsgDirect] = useState(true);
-  const [msgConnection, setMsgConnection] = useState(true);
+  const updateDraft = (key, value) => {
+    setDraftSettings((prev) => ({ ...prev, [key]: value }));
+  };
 
-  // Sync alerts
-  const [syncDone, setSyncDone] = useState(false);
-  const [syncFail, setSyncFail] = useState(true);
-  const [syncImport, setSyncImport] = useState(true);
+  const handleTimeChange = (event, selectedDate) => {
+    if (Platform.OS === 'android') {
+      setTimePickerTarget(null);
+    }
+    if (event.type === 'dismissed' || !selectedDate) {
+      return;
+    }
+    const hours = String(selectedDate.getHours()).padStart(2, '0');
+    const minutes = String(selectedDate.getMinutes()).padStart(2, '0');
+    const timeStr = `${hours}:${minutes}`;
 
-  // Quiet Hours
-  const [quietHoursEnabled, setQuietHoursEnabled] = useState(false);
-  const [quietFromHour, setQuietFromHour] = useState('22:00');
-  const [quietToHour, setQuietToHour] = useState('08:00');
+    if (timePickerTarget === 'FROM') {
+      updateDraft('quietFromHour', timeStr);
+    } else if (timePickerTarget === 'TO') {
+      updateDraft('quietToHour', timeStr);
+    }
+  };
 
-  const TIME_OPTIONS = [
-    '20:00', '21:00', '22:00', '23:00', '00:00', '01:00',
-    '06:00', '07:00', '08:00', '09:00', '10:00',
-  ];
+  const handleSave = () => {
+    setSavedSettings(draftSettings);
+    Alert.alert('✓ Saved', 'Your notification preferences have been saved.');
+    onClose();
+  };
+
+  const handleCancel = () => {
+    setDraftSettings(savedSettings);
+    onClose();
+  };
+
+  const handleRestoreDefaults = () => {
+    setDraftSettings(DEFAULT_NOTIFS);
+    Alert.alert('Defaults Restored', 'Notification preferences reset to factory defaults.');
+  };
 
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
@@ -55,7 +116,7 @@ export default function NotificationsModal({ visible, onClose }) {
                 Production calls, requests & Quiet Hours
               </Text>
             </View>
-            <TouchableOpacity onPress={onClose} style={styles.closeBtn}>
+            <TouchableOpacity onPress={handleCancel} style={styles.closeBtn}>
               <Text style={{ color: theme.textMuted, fontSize: 16, fontWeight: 'bold' }}>✕</Text>
             </TouchableOpacity>
           </View>
@@ -67,8 +128,8 @@ export default function NotificationsModal({ visible, onClose }) {
               <View style={styles.switchRow}>
                 <Text style={[styles.switchLabel, { color: theme.text }]}>Contact requests</Text>
                 <Switch
-                  value={reqContact}
-                  onValueChange={setReqContact}
+                  value={draftSettings.reqContact}
+                  onValueChange={(v) => updateDraft('reqContact', v)}
                   trackColor={{ false: '#242830', true: theme.primary }}
                   thumbColor="#ffffff"
                 />
@@ -77,8 +138,8 @@ export default function NotificationsModal({ visible, onClose }) {
               <View style={styles.switchRow}>
                 <Text style={[styles.switchLabel, { color: theme.text }]}>Request accepted</Text>
                 <Switch
-                  value={reqAccepted}
-                  onValueChange={setReqAccepted}
+                  value={draftSettings.reqAccepted}
+                  onValueChange={(v) => updateDraft('reqAccepted', v)}
                   trackColor={{ false: '#242830', true: theme.primary }}
                   thumbColor="#ffffff"
                 />
@@ -87,8 +148,8 @@ export default function NotificationsModal({ visible, onClose }) {
               <View style={styles.switchRow}>
                 <Text style={[styles.switchLabel, { color: theme.text }]}>Request declined</Text>
                 <Switch
-                  value={reqDeclined}
-                  onValueChange={setReqDeclined}
+                  value={draftSettings.reqDeclined}
+                  onValueChange={(v) => updateDraft('reqDeclined', v)}
                   trackColor={{ false: '#242830', true: theme.primary }}
                   thumbColor="#ffffff"
                 />
@@ -101,8 +162,8 @@ export default function NotificationsModal({ visible, onClose }) {
               <View style={styles.switchRow}>
                 <Text style={[styles.switchLabel, { color: theme.text }]}>Crew call updates</Text>
                 <Switch
-                  value={prodCrewCall}
-                  onValueChange={setProdCrewCall}
+                  value={draftSettings.prodCrewCall}
+                  onValueChange={(v) => updateDraft('prodCrewCall', v)}
                   trackColor={{ false: '#242830', true: theme.primary }}
                   thumbColor="#ffffff"
                 />
@@ -111,8 +172,8 @@ export default function NotificationsModal({ visible, onClose }) {
               <View style={styles.switchRow}>
                 <Text style={[styles.switchLabel, { color: theme.text }]}>Project invitations</Text>
                 <Switch
-                  value={prodInvite}
-                  onValueChange={setProdInvite}
+                  value={draftSettings.prodInvite}
+                  onValueChange={(v) => updateDraft('prodInvite', v)}
                   trackColor={{ false: '#242830', true: theme.primary }}
                   thumbColor="#ffffff"
                 />
@@ -121,8 +182,8 @@ export default function NotificationsModal({ visible, onClose }) {
               <View style={styles.switchRow}>
                 <Text style={[styles.switchLabel, { color: theme.text }]}>Production changes</Text>
                 <Switch
-                  value={prodChanges}
-                  onValueChange={setProdChanges}
+                  value={draftSettings.prodChanges}
+                  onValueChange={(v) => updateDraft('prodChanges', v)}
                   trackColor={{ false: '#242830', true: theme.primary }}
                   thumbColor="#ffffff"
                 />
@@ -135,8 +196,8 @@ export default function NotificationsModal({ visible, onClose }) {
               <View style={styles.switchRow}>
                 <Text style={[styles.switchLabel, { color: theme.text }]}>New messages</Text>
                 <Switch
-                  value={msgDirect}
-                  onValueChange={setMsgDirect}
+                  value={draftSettings.msgDirect}
+                  onValueChange={(v) => updateDraft('msgDirect', v)}
                   trackColor={{ false: '#242830', true: theme.primary }}
                   thumbColor="#ffffff"
                 />
@@ -145,8 +206,8 @@ export default function NotificationsModal({ visible, onClose }) {
               <View style={styles.switchRow}>
                 <Text style={[styles.switchLabel, { color: theme.text }]}>Connection messages</Text>
                 <Switch
-                  value={msgConnection}
-                  onValueChange={setMsgConnection}
+                  value={draftSettings.msgConnection}
+                  onValueChange={(v) => updateDraft('msgConnection', v)}
                   trackColor={{ false: '#242830', true: theme.primary }}
                   thumbColor="#ffffff"
                 />
@@ -159,8 +220,8 @@ export default function NotificationsModal({ visible, onClose }) {
               <View style={styles.switchRow}>
                 <Text style={[styles.switchLabel, { color: theme.text }]}>Sync completed</Text>
                 <Switch
-                  value={syncDone}
-                  onValueChange={setSyncDone}
+                  value={draftSettings.syncDone}
+                  onValueChange={(v) => updateDraft('syncDone', v)}
                   trackColor={{ false: '#242830', true: theme.primary }}
                   thumbColor="#ffffff"
                 />
@@ -169,8 +230,8 @@ export default function NotificationsModal({ visible, onClose }) {
               <View style={styles.switchRow}>
                 <Text style={[styles.switchLabel, { color: theme.text }]}>Sync failure</Text>
                 <Switch
-                  value={syncFail}
-                  onValueChange={setSyncFail}
+                  value={draftSettings.syncFail}
+                  onValueChange={(v) => updateDraft('syncFail', v)}
                   trackColor={{ false: '#242830', true: theme.primary }}
                   thumbColor="#ffffff"
                 />
@@ -179,8 +240,8 @@ export default function NotificationsModal({ visible, onClose }) {
               <View style={styles.switchRow}>
                 <Text style={[styles.switchLabel, { color: theme.text }]}>Import completed</Text>
                 <Switch
-                  value={syncImport}
-                  onValueChange={setSyncImport}
+                  value={draftSettings.syncImport}
+                  onValueChange={(v) => updateDraft('syncImport', v)}
                   trackColor={{ false: '#242830', true: theme.primary }}
                   thumbColor="#ffffff"
                 />
@@ -196,16 +257,47 @@ export default function NotificationsModal({ visible, onClose }) {
                   <Text style={[styles.switchDesc, { color: theme.textMuted }]}>Mute notifications during sleep/set times</Text>
                 </View>
                 <Switch
-                  value={quietHoursEnabled}
-                  onValueChange={setQuietHoursEnabled}
+                  value={draftSettings.quietHoursEnabled}
+                  onValueChange={(v) => updateDraft('quietHoursEnabled', v)}
                   trackColor={{ false: '#242830', true: theme.primary }}
                   thumbColor="#ffffff"
                 />
               </View>
 
-              {quietHoursEnabled && (
+              {draftSettings.quietHoursEnabled && (
                 <View style={styles.timePickerContainer}>
-                  <Text style={[styles.timePickerLabel, { color: theme.textSecondary }]}>FROM TIME</Text>
+                  {/* Native Time Picker Tap Targets */}
+                  <View style={styles.timeRowPicker}>
+                    <TouchableOpacity
+                      style={[styles.nativeTimeBtn, { backgroundColor: theme.surface, borderColor: theme.cardBorder }]}
+                      onPress={() => setTimePickerTarget('FROM')}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={[styles.timePickerLabel, { color: theme.textSecondary }]}>FROM</Text>
+                      <Text style={[styles.nativeTimeValue, { color: theme.primary }]}>
+                        {formatTimeDisplay(draftSettings.quietFromHour)}
+                      </Text>
+                      <Text style={[styles.nativeTimeSub, { color: theme.textMuted }]}>
+                        {draftSettings.quietFromHour} • Tap to pick
+                      </Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={[styles.nativeTimeBtn, { backgroundColor: theme.surface, borderColor: theme.cardBorder }]}
+                      onPress={() => setTimePickerTarget('TO')}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={[styles.timePickerLabel, { color: theme.textSecondary }]}>TO</Text>
+                      <Text style={[styles.nativeTimeValue, { color: theme.primary }]}>
+                        {formatTimeDisplay(draftSettings.quietToHour)}
+                      </Text>
+                      <Text style={[styles.nativeTimeSub, { color: theme.textMuted }]}>
+                        {draftSettings.quietToHour} • Tap to pick
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+
+                  <Text style={[styles.timePickerLabel, { color: theme.textSecondary, marginTop: 12 }]}>PRESETS (FROM)</Text>
                   <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginVertical: 6 }}>
                     {TIME_OPTIONS.slice(0, 6).map((t) => (
                       <TouchableOpacity
@@ -213,20 +305,20 @@ export default function NotificationsModal({ visible, onClose }) {
                         style={[
                           styles.timeChip,
                           {
-                            backgroundColor: quietFromHour === t ? theme.primary : theme.surface,
-                            borderColor: quietFromHour === t ? theme.primary : theme.cardBorder,
+                            backgroundColor: draftSettings.quietFromHour === t ? theme.primary : theme.surface,
+                            borderColor: draftSettings.quietFromHour === t ? theme.primary : theme.cardBorder,
                           },
                         ]}
-                        onPress={() => setQuietFromHour(t)}
+                        onPress={() => updateDraft('quietFromHour', t)}
                       >
-                        <Text style={[styles.timeChipText, { color: quietFromHour === t ? '#000000' : theme.text }]}>
+                        <Text style={[styles.timeChipText, { color: draftSettings.quietFromHour === t ? '#000000' : theme.text }]}>
                           {t}
                         </Text>
                       </TouchableOpacity>
                     ))}
                   </ScrollView>
 
-                  <Text style={[styles.timePickerLabel, { color: theme.textSecondary, marginTop: 10 }]}>TO TIME</Text>
+                  <Text style={[styles.timePickerLabel, { color: theme.textSecondary, marginTop: 10 }]}>PRESETS (TO)</Text>
                   <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginVertical: 6 }}>
                     {TIME_OPTIONS.slice(6).map((t) => (
                       <TouchableOpacity
@@ -234,32 +326,69 @@ export default function NotificationsModal({ visible, onClose }) {
                         style={[
                           styles.timeChip,
                           {
-                            backgroundColor: quietToHour === t ? theme.primary : theme.surface,
-                            borderColor: quietToHour === t ? theme.primary : theme.cardBorder,
+                            backgroundColor: draftSettings.quietToHour === t ? theme.primary : theme.surface,
+                            borderColor: draftSettings.quietToHour === t ? theme.primary : theme.cardBorder,
                           },
                         ]}
-                        onPress={() => setQuietToHour(t)}
+                        onPress={() => updateDraft('quietToHour', t)}
                       >
-                        <Text style={[styles.timeChipText, { color: quietToHour === t ? '#000000' : theme.text }]}>
+                        <Text style={[styles.timeChipText, { color: draftSettings.quietToHour === t ? '#000000' : theme.text }]}>
                           {t}
                         </Text>
                       </TouchableOpacity>
                     ))}
                   </ScrollView>
+
+                  {/* Native Date/Time Picker Modal */}
+                  {timePickerTarget && (
+                    <DateTimePicker
+                      value={parseTimeString(timePickerTarget === 'FROM' ? draftSettings.quietFromHour : draftSettings.quietToHour)}
+                      mode="time"
+                      is24Hour={false}
+                      display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                      onChange={handleTimeChange}
+                    />
+                  )}
                 </View>
               )}
             </View>
 
-            <TouchableOpacity
-              style={[styles.saveBtn, { backgroundColor: theme.primary }]}
-              onPress={() => {
-                Alert.alert('✓ Saved', 'Your notification preferences have been saved.');
-                onClose();
-              }}
-              activeOpacity={0.8}
-            >
-              <Text style={styles.saveBtnText}>Save Preferences</Text>
-            </TouchableOpacity>
+            {/* REALISTIC COMING SOON FEATURE */}
+            <Text style={[styles.sectionHeading, { color: theme.textSecondary, marginTop: 18 }]}>EMERGENCY NOTIFICATIONS</Text>
+            <View style={[styles.comingSoonCard, { backgroundColor: theme.background, borderColor: theme.cardBorder }]}>
+              <View style={styles.comingSoonHeader}>
+                <Text style={[styles.comingSoonTitle, { color: theme.text }]}>Critical Call Sheet & 1st AD Push</Text>
+                <View style={styles.comingSoonBadge}>
+                  <Text style={styles.comingSoonBadgeText}>COMING SOON</Text>
+                </View>
+              </View>
+              <Text style={[styles.comingSoonDesc, { color: theme.textMuted }]}>
+                High-priority production alarms that bypass phone Do Not Disturb / Focus modes for urgent 1st AD schedule shifts, emergency weather location moves, and next-day call time changes.
+              </Text>
+            </View>
+
+            {/* Save / Cancel / Restore Defaults Bottom Controls */}
+            <View style={styles.footerControls}>
+              <View style={styles.saveCancelRow}>
+                <TouchableOpacity
+                  style={[styles.cancelBtn, { borderColor: theme.cardBorder }]}
+                  onPress={handleCancel}
+                >
+                  <Text style={[styles.cancelBtnText, { color: theme.textSecondary }]}>Cancel</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[styles.saveBtn, { backgroundColor: theme.primary }]}
+                  onPress={handleSave}
+                >
+                  <Text style={styles.saveBtnText}>Save Preferences</Text>
+                </TouchableOpacity>
+              </View>
+
+              <TouchableOpacity style={styles.restoreBtn} onPress={handleRestoreDefaults}>
+                <Text style={[styles.restoreBtnText, { color: theme.textMuted }]}>↺ Restore Defaults</Text>
+              </TouchableOpacity>
+            </View>
           </ScrollView>
         </View>
       </View>
@@ -344,6 +473,26 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     letterSpacing: 0.5,
   },
+  timeRowPicker: {
+    flexDirection: 'row',
+    gap: 10,
+    marginVertical: 8,
+  },
+  nativeTimeBtn: {
+    flex: 1,
+    padding: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+  },
+  nativeTimeValue: {
+    fontSize: 18,
+    fontWeight: '800',
+    marginTop: 4,
+    marginBottom: 2,
+  },
+  nativeTimeSub: {
+    fontSize: 11,
+  },
   timeChip: {
     paddingHorizontal: 14,
     paddingVertical: 8,
@@ -355,16 +504,80 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
   },
-  saveBtn: {
-    height: 46,
-    borderRadius: 10,
+  comingSoonCard: {
+    borderRadius: 12,
+    borderWidth: 1,
+    padding: 14,
+    marginTop: 4,
+  },
+  comingSoonHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  comingSoonTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  comingSoonBadge: {
+    backgroundColor: '#3b82f620',
+    borderColor: '#3b82f6',
+    borderWidth: 1,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  comingSoonBadgeText: {
+    color: '#60a5fa',
+    fontSize: 9,
+    fontWeight: '900',
+    letterSpacing: 0.6,
+  },
+  comingSoonDesc: {
+    fontSize: 11,
+    lineHeight: 16,
+  },
+  footerControls: {
+    marginTop: 20,
+    alignItems: 'center',
+  },
+  saveCancelRow: {
+    flexDirection: 'row',
+    width: '100%',
+    marginBottom: 10,
+  },
+  cancelBtn: {
+    flex: 1,
+    height: 44,
+    borderRadius: 8,
+    borderWidth: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    marginTop: 20,
+    marginRight: 8,
+  },
+  cancelBtnText: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  saveBtn: {
+    flex: 1,
+    height: 44,
+    borderRadius: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginLeft: 8,
   },
   saveBtnText: {
     color: '#000000',
     fontSize: 14,
     fontWeight: '800',
+  },
+  restoreBtn: {
+    paddingVertical: 6,
+  },
+  restoreBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
   },
 });

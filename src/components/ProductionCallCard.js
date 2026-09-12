@@ -1,11 +1,14 @@
 import React, { useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { useTheme } from '../context/ThemeContext';
+import { useAuth } from '../context/AuthContext';
 
-export default function ProductionCallCard({ project, onExpressInterest, onViewLead }) {
+export default function ProductionCallCard({ project, onExpressInterest, onViewLead, onEditCall }) {
   const { theme } = useTheme();
+  const { currentUser } = useAuth();
   const [showRequirements, setShowRequirements] = useState(false);
 
+  const isOwner = currentUser?.uid && project.createdBy === currentUser.uid;
   const hasDetailedPositions = project.crewPositions && project.crewPositions.length > 0;
 
   return (
@@ -105,12 +108,23 @@ export default function ProductionCallCard({ project, onExpressInterest, onViewL
           </TouchableOpacity>
         )}
 
-        <TouchableOpacity
-          style={[styles.expressBtn, { backgroundColor: theme.primary || '#f5a623' }]}
-          onPress={onExpressInterest}
-        >
-          <Text style={styles.expressText}>Submit Interest / Reel ➔</Text>
-        </TouchableOpacity>
+        {isOwner ? (
+          <TouchableOpacity
+            style={[styles.expressBtn, { backgroundColor: theme.primary || '#f5a623' }]}
+            onPress={onEditCall}
+          >
+            <Text style={[styles.expressText, { color: '#000000', fontWeight: '800' }]}>
+              ⚙️ Edit Call
+            </Text>
+          </TouchableOpacity>
+        ) : (
+          <TouchableOpacity
+            style={[styles.expressBtn, { backgroundColor: theme.primary || '#f5a623' }]}
+            onPress={onExpressInterest}
+          >
+            <Text style={styles.expressText}>Submit Interest / Reel ➔</Text>
+          </TouchableOpacity>
+        )}
       </View>
     </View>
   );

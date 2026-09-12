@@ -82,7 +82,7 @@ export default function SettingsScreen({ navigation }) {
         <View style={[styles.sectionGroup, { backgroundColor: theme.card, borderColor: theme.cardBorder }]}>
           <TouchableOpacity
             style={styles.settingItem}
-            onPress={() => navigation.navigate('Profile')}
+            onPress={() => navigation.navigate('ProfileMain')}
             activeOpacity={0.7}
           >
             <Text style={styles.itemIcon}>👤</Text>

@@ -21,6 +21,8 @@ import { useTheme } from '../../context/ThemeContext';
 import TalentCard from '../../components/TalentCard';
 import FilterModal from '../../components/FilterModal';
 import FilmmakerDetailModal from '../../components/FilmmakerDetailModal';
+import NotificationCenterModal from '../../components/NotificationCenterModal';
+import { streamNotifications } from '../../services/notificationService';
 
 const PAGE_SIZE = 20;
 
@@ -48,6 +50,18 @@ export default function ExploreDirectoryScreen({ navigation }) {
   });
 
   const [selectedFilmmaker, setSelectedFilmmaker] = useState(null);
+  const [notificationsVisible, setNotificationsVisible] = useState(false);
+  const [notifications, setNotifications] = useState([]);
+
+  useEffect(() => {
+    if (!currentUser?.uid) return;
+    const unsub = streamNotifications(currentUser.uid, (list) => {
+      setNotifications(list);
+    });
+    return () => unsub();
+  }, [currentUser?.uid]);
+
+  const unreadNotificationCount = notifications.filter((n) => !n.isRead).length;
 
   const isFiltered =
     activeFilters.status !== 'ALL' ||
@@ -184,29 +198,52 @@ export default function ExploreDirectoryScreen({ navigation }) {
             CREW <Text style={{ color: theme.primary }}>DIRECTORY</Text>
           </Text>
 
-          {/* Filter Trigger Button */}
-          <TouchableOpacity
-            style={[
-              styles.filterIconBtn,
-              {
-                backgroundColor: isFiltered ? '#242830' : theme.card,
-                borderColor: isFiltered ? theme.primary : theme.cardBorder,
-              },
-            ]}
-            onPress={() => setIsFilterModalOpen(true)}
-            activeOpacity={0.8}
-          >
-            <Text style={{ fontSize: 13 }}>🎛</Text>
-            <Text
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            <TouchableOpacity
               style={[
-                styles.filterBtnText,
-                { color: isFiltered ? theme.primary : theme.text },
+                styles.bellBtn,
+                {
+                  backgroundColor: theme.card,
+                  borderColor: theme.cardBorder,
+                },
               ]}
+              onPress={() => setNotificationsVisible(true)}
+              activeOpacity={0.8}
             >
-              Filter
-            </Text>
-            {isFiltered && <View style={[styles.activeDot, { backgroundColor: theme.primary }]} />}
-          </TouchableOpacity>
+              <Text style={{ fontSize: 15 }}>🔔</Text>
+              {unreadNotificationCount > 0 && (
+                <View style={[styles.bellBadge, { backgroundColor: theme.primary }]}>
+                  <Text style={styles.bellBadgeText}>
+                    {unreadNotificationCount > 9 ? '9+' : unreadNotificationCount}
+                  </Text>
+                </View>
+              )}
+            </TouchableOpacity>
+
+            {/* Filter Trigger Button */}
+            <TouchableOpacity
+              style={[
+                styles.filterIconBtn,
+                {
+                  backgroundColor: isFiltered ? '#242830' : theme.card,
+                  borderColor: isFiltered ? theme.primary : theme.cardBorder,
+                },
+              ]}
+              onPress={() => setIsFilterModalOpen(true)}
+              activeOpacity={0.8}
+            >
+              <Text style={{ fontSize: 13 }}>🎛</Text>
+              <Text
+                style={[
+                  styles.filterBtnText,
+                  { color: isFiltered ? theme.primary : theme.text },
+                ]}
+              >
+                Filter
+              </Text>
+              {isFiltered && <View style={[styles.activeDot, { backgroundColor: theme.primary }]} />}
+            </TouchableOpacity>
+          </View>
         </View>
 
         <Text style={[styles.sub, { color: theme.textSecondary }]}>
@@ -339,6 +376,13 @@ export default function ExploreDirectoryScreen({ navigation }) {
           });
         }}
       />
+
+      {/* In-App Notification Center */}
+      <NotificationCenterModal
+        visible={notificationsVisible}
+        onClose={() => setNotificationsVisible(false)}
+        navigation={navigation}
+      />
     </View>
   );
 }
@@ -352,6 +396,31 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
   },
   headerTitleRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  bellBtn: {
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    borderRadius: 8,
+    borderWidth: 1,
+    position: 'relative',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  bellBadge: {
+    position: 'absolute',
+    top: -4,
+    right: -4,
+    borderRadius: 9,
+    minWidth: 18,
+    height: 18,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 3,
+  },
+  bellBadgeText: {
+    color: '#000000',
+    fontSize: 10,
+    fontWeight: '800',
+  },
   mainTitle: { fontSize: 20, fontWeight: '900', letterSpacing: 1.2 },
   filterIconBtn: {
     flexDirection: 'row',

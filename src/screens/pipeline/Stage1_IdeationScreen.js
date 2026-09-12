@@ -20,6 +20,8 @@ import CustomInput from '../../components/CustomInput';
 import CustomButton from '../../components/CustomButton';
 import StageProgressBar from '../../components/StageProgressBar';
 import BackButton from '../../components/BackButton';
+import RoomPeopleModal from '../../components/RoomPeopleModal';
+import EditRoomModal from '../../components/EditRoomModal';
 
 export default function Stage1_IdeationScreen({ navigation }) {
   const { currentUser, userProfile } = useAuth();
@@ -31,6 +33,8 @@ export default function Stage1_IdeationScreen({ navigation }) {
   const [characterOutlines, setCharacterOutlines] = useState('');
   const [isSavingOutline, setIsSavingOutline] = useState(false);
   const [isUploadingFile, setIsUploadingFile] = useState(false);
+  const [isPeopleModalOpen, setIsPeopleModalOpen] = useState(false);
+  const [isEditRoomModalOpen, setIsEditRoomModalOpen] = useState(false);
 
   // Cloud Stage 1 State
   const [stageState, setStageState] = useState({
@@ -248,7 +252,7 @@ export default function Stage1_IdeationScreen({ navigation }) {
         </View>
 
         <View style={styles.headerTitleRow}>
-          <View>
+          <View style={{ flex: 1 }}>
             <Text style={[styles.stageTitle, { color: theme?.text || '#ffffff' }]}>
               STAGE 1: IDEATION & STORY
             </Text>
@@ -256,10 +260,32 @@ export default function Stage1_IdeationScreen({ navigation }) {
               Film: {roomData?.title || 'Production'} • Genre: {roomData?.genre || 'Drama'}
             </Text>
           </View>
-          <View style={[styles.statusTag, { backgroundColor: stageState.status === 'APPROVED' ? '#1e3d29' : '#2a2215' }]}>
-            <Text style={[styles.statusTagText, { color: stageState.status === 'APPROVED' ? '#4ade80' : theme?.primary || '#f5a623' }]}>
-              {stageState.status}
-            </Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <TouchableOpacity
+              style={[styles.crewBadgeBtn, { backgroundColor: theme?.surface || '#121417', borderColor: theme?.cardBorder || '#242830' }]}
+              onPress={() => setIsEditRoomModalOpen(true)}
+              activeOpacity={0.8}
+            >
+              <Text style={[styles.crewBadgeText, { color: theme?.textSecondary || '#9ca3af' }]}>
+                ⚙️ Edit
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.crewBadgeBtn, { backgroundColor: theme?.surface || '#121417', borderColor: theme?.primary || '#f5a623' }]}
+              onPress={() => setIsPeopleModalOpen(true)}
+              activeOpacity={0.8}
+            >
+              <Text style={[styles.crewBadgeText, { color: theme?.primary || '#f5a623' }]}>
+                👥 People ({Object.keys(roomData?.members || {}).length})
+              </Text>
+            </TouchableOpacity>
+
+            <View style={[styles.statusTag, { backgroundColor: stageState.status === 'APPROVED' ? '#1e3d29' : '#2a2215' }]}>
+              <Text style={[styles.statusTagText, { color: stageState.status === 'APPROVED' ? '#4ade80' : theme?.primary || '#f5a623' }]}>
+                {stageState.status}
+              </Text>
+            </View>
           </View>
         </View>
       </View>
@@ -470,6 +496,22 @@ export default function Stage1_IdeationScreen({ navigation }) {
           </View>
         )}
       </ScrollView>
+
+      {/* Production Room People & Crew Modal */}
+      <RoomPeopleModal
+        visible={isPeopleModalOpen}
+        roomId={activeRoomId}
+        roomData={roomData}
+        onClose={() => setIsPeopleModalOpen(false)}
+      />
+
+      {/* Edit Production Room Modal */}
+      <EditRoomModal
+        visible={isEditRoomModalOpen}
+        roomId={activeRoomId}
+        roomData={roomData}
+        onClose={() => setIsEditRoomModalOpen(false)}
+      />
     </View>
   );
 }
@@ -499,6 +541,19 @@ const styles = StyleSheet.create({
   stageSubtitle: { fontSize: 11, marginTop: 2 },
   statusTag: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 4 },
   statusTagText: { fontSize: 10, fontWeight: 'bold' },
+  crewBadgeBtn: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  crewBadgeText: {
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 0.3,
+  },
   scrollArea: { flex: 1 },
   scrollContent: { padding: 16, paddingBottom: 80 },
   lockedCard: {
