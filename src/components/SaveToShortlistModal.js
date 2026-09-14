@@ -19,10 +19,12 @@ import {
   addTalentToShortlist,
   removeTalentFromShortlist,
 } from '../services/shortlistService';
+import { useToast } from '../context/ToastContext';
 
 export default function SaveToShortlistModal({ visible, talent, onClose }) {
   const { theme } = useTheme();
   const { currentUser } = useAuth();
+  const { showToast } = useToast();
 
   const [shortlists, setShortlists] = useState([]);
   const [newListName, setNewListName] = useState('');
@@ -50,9 +52,9 @@ export default function SaveToShortlistModal({ visible, talent, onClose }) {
       // Automatically add this talent to the newly created shortlist
       await addTalentToShortlist(currentUser.uid, created.id, talent);
       setNewListName('');
-      Alert.alert('Shortlist Created', `"${created.name}" created with ${talent.name} added.`);
+      showToast({ type: 'success', message: `Added to "${created.name}"` });
     } catch (err) {
-      Alert.alert('Error', err.message);
+      showToast({ type: 'error', message: err.message || "Couldn't create shortlist" });
     } finally {
       setIsCreating(false);
     }
@@ -63,11 +65,13 @@ export default function SaveToShortlistModal({ visible, talent, onClose }) {
     try {
       if (isAlreadyInList) {
         await removeTalentFromShortlist(currentUser.uid, list.id, talent.id);
+        showToast({ type: 'info', message: `Removed from "${list.name}"` });
       } else {
         await addTalentToShortlist(currentUser.uid, list.id, talent);
+        showToast({ type: 'success', message: `Added to "${list.name}"` });
       }
     } catch (err) {
-      Alert.alert('Update Failed', err.message);
+      showToast({ type: 'error', message: err.message || "Couldn't update shortlist" });
     }
   };
 

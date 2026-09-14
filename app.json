@@ -28,8 +28,8 @@
       "expo-sqlite"
     ],
     "extra": {
-      "cloudinaryCloudName": "filmroom_media",
-      "cloudinaryUploadPreset": "filmroom_unsigned"
+      "cloudinaryCloudName": "",
+      "cloudinaryUploadPreset": ""
     }
   }
 }

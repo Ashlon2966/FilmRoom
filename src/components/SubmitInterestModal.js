@@ -7,39 +7,41 @@ import {
   TextInput,
   TouchableOpacity,
   ScrollView,
-  Alert,
   ActivityIndicator,
   Pressable,
 } from 'react-native';
 import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
 import { submitContactRequest, REQUEST_TYPES } from '../services/contactRequestService';
+import { useToast } from '../context/ToastContext';
 
 export default function SubmitInterestModal({
   visible,
   targetLead,
   initialProject = '',
   initialRole = '',
+  callData = null,
   onClose,
   onSuccess,
 }) {
   const { theme } = useTheme();
   const { currentUser, userProfile } = useAuth();
+  const { showToast } = useToast();
 
   const [roleOrDepartment, setRoleOrDepartment] = useState(
-    initialRole || userProfile?.role || userProfile?.roles?.[0] || ''
+    initialRole || callData?.characterName || userProfile?.role || userProfile?.roles?.[0] || ''
   );
   const [portfolioOrReel, setPortfolioOrReel] = useState(userProfile?.showreelUrl || '');
-  const [projectInterest, setProjectInterest] = useState(initialProject || '');
+  const [projectInterest, setProjectInterest] = useState(initialProject || callData?.title || '');
   const [message, setMessage] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
     if (visible) {
-      if (initialProject) setProjectInterest(initialProject);
-      if (initialRole) setRoleOrDepartment(initialRole);
+      if (initialProject || callData?.title) setProjectInterest(initialProject || callData?.title);
+      if (initialRole || callData?.characterName) setRoleOrDepartment(initialRole || callData?.characterName);
     }
-  }, [visible, initialProject, initialRole]);
+  }, [visible, initialProject, initialRole, callData]);
 
   if (!targetLead) return null;
 
@@ -79,17 +81,22 @@ export default function SubmitInterestModal({
           portfolioOrReel: portfolioOrReel.trim() || null,
           projectInterest: projectInterest.trim() || null,
           message: message.trim(),
+          isActorCall: callData?.postType === 'CASTING_CALL' || !!callData?.characterName,
+          characterName: callData?.characterName || null,
+          characterDescription: callData?.characterDescription || null,
+          rolePosition: callData?.rolePosition || null,
+          genderPreference: callData?.genderPreference || null,
+          scriptUrl: callData?.draftScriptUrl || callData?.scriptSidesUrl || null,
+          scriptShared: false,
+          requiresScriptApproval: true,
         },
       });
 
-      Alert.alert(
-        'Submission Dispatched',
-        `Your professional introduction and portfolio have been routed to ${targetLead.name}. If approved, a professional connection will be established.`,
-        [{ text: 'Done', onPress: () => onSuccess && onSuccess() }]
-      );
+      showToast({ type: 'success', message: 'Interest submitted' });
+      if (onSuccess) onSuccess();
       onClose();
     } catch (err) {
-      Alert.alert('Submission Error', err.message);
+      showToast({ type: 'error', message: err.message || "Couldn't submit interest" });
     } finally {
       setIsSubmitting(false);
     }

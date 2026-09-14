@@ -17,20 +17,26 @@ import {
   where,
   onSnapshot,
 } from 'firebase/firestore';
-import { db } from '../../../firebaseConfig';
 import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
-import { findUserByUsername } from '../../services/userService';
+import { useToast } from '../../context/ToastContext';
+import { useModal } from '../../context/ModalContext';
+import { findUserByUsername, findUserByFilmRoomCode } from '../../services/userService';
 import {
   streamAcceptedConnections,
   acceptConnectionRequest,
   rejectConnectionRequest,
   removeConnection,
+  sendConnectionRequest,
 } from '../../services/connectionService';
+import CustomActionDropUp from '../../components/CustomActionDropUp';
+import QuickProfileModal from '../../components/QuickProfileModal';
 
 export default function ConversationsListScreen({ navigation }) {
-  const { currentUser } = useAuth();
+  const { currentUser, userProfile } = useAuth();
   const { theme } = useTheme();
+  const { showToast } = useToast();
+  const { showConfirm } = useModal();
 
   const [activeSegment, setActiveSegment] = useState('CHATS'); // 'CHATS' | 'CONNECTIONS'
   const [threads, setThreads] = useState([]);
@@ -43,6 +49,14 @@ export default function ConversationsListScreen({ navigation }) {
   const [modalVisible, setModalVisible] = useState(false);
   const [searchUsername, setSearchUsername] = useState('');
   const [searching, setSearching] = useState(false);
+
+  // FAB & Drop-Up State (Requirements 33, 34, 35, 79)
+  const [isFabDropUpVisible, setIsFabDropUpVisible] = useState(false);
+  const [isCodeModalVisible, setIsCodeModalVisible] = useState(false);
+  const [filmRoomCodeInput, setFilmRoomCodeInput] = useState('');
+  const [isSearchingCode, setIsSearchingCode] = useState(false);
+  const [selectedQuickProfile, setSelectedQuickProfile] = useState(null);
+  const [isQuickProfileVisible, setIsQuickProfileVisible] = useState(false);
 
   // 1. Stream direct message threads
   useEffect(() => {
@@ -122,10 +136,11 @@ export default function ConversationsListScreen({ navigation }) {
   // Open chat with accepted connection
   const handleOpenNewChat = () => {
     if (connections.length === 0) {
-      Alert.alert(
-        'Professional Connection Required',
-        'FilmRoom requires an accepted contact request before direct messaging is enabled. Browse the Explore directory to discover filmmakers and establish a connection.'
-      );
+      showToast({
+        type: 'info',
+        title: 'Connection Required',
+        message: 'FilmRoom requires an accepted contact request before direct messaging is enabled. Connect with a filmmaker using their FilmRoom Code first.',
+      });
       return;
     }
     setModalVisible(true);
@@ -140,7 +155,7 @@ export default function ConversationsListScreen({ navigation }) {
         id: peerId,
         fullName: peer.fullName || peer.name || 'Filmmaker',
         username: peer.username || 'crew',
-        photoURL: peer.photoURL || null,
+        photoURL: peer.photoURL || peer.avatar || null,
         role: peer.role || peer.roles?.[0] || 'Filmmaker',
       },
     });
@@ -150,38 +165,91 @@ export default function ConversationsListScreen({ navigation }) {
   const handleAcceptRequest = async (item) => {
     try {
       await acceptConnectionRequest(item.id);
+      showToast({ type: 'success', message: 'Connection established' });
     } catch (err) {
-      Alert.alert('Error', err.message);
+      showToast({ type: 'error', message: err.message || 'Failed to accept connection' });
     }
   };
 
   const handleDeclineRequest = async (item) => {
     try {
       await rejectConnectionRequest(item.id);
+      showToast({ type: 'info', message: 'Connection request declined' });
     } catch (err) {
-      Alert.alert('Error', err.message);
+      showToast({ type: 'error', message: err.message || 'Failed to decline connection' });
     }
   };
 
   const handleRemoveConnection = (connectionId, peerName) => {
-    Alert.alert(
-      'Remove Connection',
-      `Remove connection with ${peerName}? Your message history will remain intact.`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Remove',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              await removeConnection(connectionId);
-            } catch (err) {
-              Alert.alert('Error', err.message);
-            }
-          },
-        },
-      ]
-    );
+    showConfirm({
+      title: 'Remove Connection?',
+      message: `Remove connection with ${peerName}? Your message history will remain intact.`,
+      confirmText: 'Remove',
+      cancelText: 'Keep',
+      isDestructive: true,
+      onConfirm: async () => {
+        try {
+          await removeConnection(connectionId);
+          showToast({ type: 'info', message: 'Connection removed' });
+        } catch (err) {
+          showToast({ type: 'error', message: err.message || 'Failed to remove connection' });
+        }
+      },
+    });
+  };
+
+  // FAB Handlers (Requirements 33, 34, 35, 79)
+  const handleFabActionSelect = (action) => {
+    if (action.id === 'ADD_CONNECTION') {
+      setFilmRoomCodeInput('');
+      setIsCodeModalVisible(true);
+    } else if (action.id === 'START_CHAT') {
+      handleOpenNewChat();
+    }
+  };
+
+  const handleSearchFilmRoomCode = async () => {
+    const cleanCode = filmRoomCodeInput.trim().toUpperCase();
+    if (cleanCode.length !== 10) {
+      showToast({ type: 'warning', message: 'Enter a valid 10-character FilmRoom Code (e.g. FR7K2P91XA).' });
+      return;
+    }
+
+    if (userProfile?.filmRoomId && cleanCode === userProfile.filmRoomId.toUpperCase()) {
+      showToast({ type: 'info', message: 'This is your own FilmRoom Code.' });
+      return;
+    }
+
+    setIsSearchingCode(true);
+    try {
+      const user = await findUserByFilmRoomCode(cleanCode);
+      if (!user) {
+        showToast({ type: 'error', message: `No filmmaker found with code ${cleanCode}.` });
+        return;
+      }
+      setIsCodeModalVisible(false);
+      setSelectedQuickProfile(user);
+      setIsQuickProfileVisible(true);
+    } catch (err) {
+      showToast({ type: 'error', message: err.message || 'Error looking up code.' });
+    } finally {
+      setIsSearchingCode(false);
+    }
+  };
+
+  const handleSendConnectionRequestFromCode = async (targetUser) => {
+    try {
+      await sendConnectionRequest(currentUser, targetUser);
+      showToast({
+        type: 'success',
+        title: 'Request Dispatched',
+        message: `Connection request sent to ${targetUser.fullName || targetUser.displayName || 'filmmaker'}.`,
+      });
+      setIsQuickProfileVisible(false);
+      setSelectedQuickProfile(null);
+    } catch (err) {
+      showToast({ type: 'error', message: err.message || 'Failed to send connection request.' });
+    }
   };
 
   // Filtered threads list
@@ -212,13 +280,6 @@ export default function ConversationsListScreen({ navigation }) {
           <Text style={[styles.headerTitle, { color: theme.text }]}>
             COMMUNICATIONS
           </Text>
-          <TouchableOpacity
-            style={[styles.newMsgBtn, { backgroundColor: theme.primary }]}
-            onPress={handleOpenNewChat}
-            activeOpacity={0.8}
-          >
-            <Text style={styles.newMsgBtnText}>+ New Chat</Text>
-          </TouchableOpacity>
         </View>
 
         {/* Segmented Control: Messages vs Connections */}
@@ -314,8 +375,8 @@ export default function ConversationsListScreen({ navigation }) {
                 }
                 activeOpacity={0.7}
               >
-                {peer.photoURL ? (
-                  <Image source={{ uri: peer.photoURL }} style={styles.avatarImage} />
+                {(peer.photoURL || peer.avatar) ? (
+                  <Image source={{ uri: peer.photoURL || peer.avatar }} style={styles.avatarImage} />
                 ) : (
                   <View style={[styles.avatarCircle, { backgroundColor: theme.surface }]}>
                     <Text style={[styles.avatarText, { color: theme.primary }]}>
@@ -388,8 +449,8 @@ export default function ConversationsListScreen({ navigation }) {
                       ]}
                     >
                       <View style={styles.pendingInfoRow}>
-                        {initiator.photoURL ? (
-                          <Image source={{ uri: initiator.photoURL }} style={styles.avatarImage} />
+                        {(initiator.photoURL || initiator.avatar) ? (
+                          <Image source={{ uri: initiator.photoURL || initiator.avatar }} style={styles.avatarImage} />
                         ) : (
                           <View style={[styles.avatarCircle, { backgroundColor: theme.surface }]}>
                             <Text style={[styles.avatarText, { color: theme.primary }]}>
@@ -449,8 +510,8 @@ export default function ConversationsListScreen({ navigation }) {
                   { backgroundColor: theme.card, borderColor: theme.cardBorder },
                 ]}
               >
-                {peer.photoURL ? (
-                  <Image source={{ uri: peer.photoURL }} style={styles.avatarImage} />
+                {(peer.photoURL || peer.avatar) ? (
+                  <Image source={{ uri: peer.photoURL || peer.avatar }} style={styles.avatarImage} />
                 ) : (
                   <View style={[styles.avatarCircle, { backgroundColor: theme.surface }]}>
                     <Text style={[styles.avatarText, { color: theme.primary }]}>
@@ -477,7 +538,7 @@ export default function ConversationsListScreen({ navigation }) {
                           id: peerId,
                           fullName: peer.fullName,
                           username: peer.username,
-                          photoURL: peer.photoURL,
+                          photoURL: peer.photoURL || peer.avatar,
                           role: peer.role,
                         },
                       })
@@ -538,8 +599,8 @@ export default function ConversationsListScreen({ navigation }) {
                     onPress={() => handleSelectConnectionToChat(item)}
                     activeOpacity={0.8}
                   >
-                    {peer.photoURL ? (
-                      <Image source={{ uri: peer.photoURL }} style={styles.connAvatar} />
+                    {(peer.photoURL || peer.avatar) ? (
+                      <Image source={{ uri: peer.photoURL || peer.avatar }} style={styles.connAvatar} />
                     ) : (
                       <View style={[styles.connAvatarPlaceholder, { backgroundColor: theme.card }]}>
                         <Text style={{ color: theme.primary, fontWeight: 'bold' }}>
@@ -577,6 +638,99 @@ export default function ConversationsListScreen({ navigation }) {
           </View>
         </View>
       </Modal>
+
+      {/* Floating Action Button (Requirements 33 & 79) */}
+      <TouchableOpacity
+        style={[styles.fabBtn, { backgroundColor: theme.primary || '#f5a623' }]}
+        onPress={() => setIsFabDropUpVisible(true)}
+        activeOpacity={0.85}
+      >
+        <Text style={styles.fabBtnText}>+</Text>
+      </TouchableOpacity>
+
+      {/* Custom Action Drop-Up (Requirement 79) */}
+      <CustomActionDropUp
+        visible={isFabDropUpVisible}
+        title="COMMUNICATIONS & NETWORK"
+        actions={[
+          {
+            id: 'ADD_CONNECTION',
+            label: 'Add New Connection',
+            description: 'Find a filmmaker by 10-character FilmRoom Code',
+            icon: '🔗',
+          },
+          {
+            id: 'START_CHAT',
+            label: 'Start New Chat',
+            description: 'Message one of your verified professional connections',
+            icon: '💬',
+          },
+        ]}
+        onSelect={handleFabActionSelect}
+        onClose={() => setIsFabDropUpVisible(false)}
+      />
+
+      {/* FilmRoom Code Lookup Modal (Requirement 34) */}
+      <Modal visible={isCodeModalVisible} transparent animationType="fade" onRequestClose={() => setIsCodeModalVisible(false)}>
+        <View style={styles.codeModalOverlay}>
+          <View style={[styles.codeModalCard, { backgroundColor: theme.card || '#181b1f', borderColor: theme.cardBorder || '#242830' }]}>
+            <Text style={[styles.codeModalTitle, { color: theme.text || '#ffffff' }]}>FIND FILMMAKER</Text>
+            <Text style={[styles.codeModalSubtitle, { color: theme.textSecondary || '#9ca3af' }]}>
+              Enter their unique 10-character FilmRoom Code (e.g. FR7K2P91XA)
+            </Text>
+
+            <TextInput
+              style={[
+                styles.codeInput,
+                {
+                  backgroundColor: theme.surface || '#121417',
+                  borderColor: theme.cardBorder || '#242830',
+                  color: theme.text || '#ffffff',
+                },
+              ]}
+              placeholder="FR..."
+              placeholderTextColor={theme.textMuted || '#64748b'}
+              value={filmRoomCodeInput}
+              onChangeText={(t) => setFilmRoomCodeInput(t.toUpperCase())}
+              autoCapitalize="characters"
+              maxLength={10}
+            />
+
+            <View style={styles.codeModalActions}>
+              <TouchableOpacity
+                style={[styles.codeCancelBtn, { borderColor: theme.cardBorder || '#242830' }]}
+                onPress={() => setIsCodeModalVisible(false)}
+              >
+                <Text style={{ color: theme.textSecondary || '#9ca3af', fontWeight: '700', fontSize: 13 }}>Cancel</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.codeFindBtn, { backgroundColor: theme.primary || '#f5a623' }]}
+                onPress={handleSearchFilmRoomCode}
+                disabled={isSearchingCode}
+              >
+                {isSearchingCode ? (
+                  <ActivityIndicator size="small" color="#000000" />
+                ) : (
+                  <Text style={{ color: '#000000', fontWeight: '800', fontSize: 13 }}>Find User</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Quick Profile Modal for Discovered User (Requirements 32, 34) */}
+      <QuickProfileModal
+        visible={isQuickProfileVisible}
+        user={selectedQuickProfile}
+        onClose={() => {
+          setIsQuickProfileVisible(false);
+          setSelectedQuickProfile(null);
+        }}
+        primaryActionLabel="Send Connection Request"
+        onPrimaryAction={handleSendConnectionRequestFromCode}
+      />
     </View>
   );
 }
@@ -858,6 +1012,81 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 6,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  fabBtn: {
+    position: 'absolute',
+    bottom: 24,
+    right: 20,
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    justifyContent: 'center',
+    alignItems: 'center',
+    elevation: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.35,
+    shadowRadius: 6,
+    zIndex: 99,
+  },
+  fabBtnText: {
+    color: '#000000',
+    fontSize: 28,
+    fontWeight: '800',
+    marginTop: -2,
+  },
+  codeModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.75)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  codeModalCard: {
+    width: '100%',
+    maxWidth: 380,
+    borderRadius: 14,
+    borderWidth: 1,
+    padding: 20,
+  },
+  codeModalTitle: {
+    fontSize: 16,
+    fontWeight: '900',
+    letterSpacing: 1,
+    marginBottom: 4,
+  },
+  codeModalSubtitle: {
+    fontSize: 12,
+    marginBottom: 16,
+    lineHeight: 16,
+  },
+  codeInput: {
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 16,
+    fontWeight: '800',
+    letterSpacing: 2,
+    marginBottom: 16,
+  },
+  codeModalActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 10,
+  },
+  codeCancelBtn: {
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    borderWidth: 1,
+  },
+  codeFindBtn: {
+    paddingVertical: 10,
+    paddingHorizontal: 18,
+    borderRadius: 8,
     justifyContent: 'center',
     alignItems: 'center',
   },

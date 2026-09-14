@@ -2,15 +2,21 @@
  * FilmRoom Cloudinary Media Upload Service
  * 
  * Secure, reusable client-side upload service using Cloudinary Unsigned Upload Presets.
- * - Zero API secret exposure
+ * - Zero API secret exposure (client uses only Cloud Name + Unsigned Preset)
  * - Granular 0-100% upload progress reporting
  * - Cancellation support via XMLHttpRequest abort
  * - Client-side size & file-type validation
  * - Dynamic URL transformations for optimized cinema thumbnails
- * - Detailed HTTP status & actionable diagnostic reporting
+ * - Pre-upload configuration validation (no network calls if unconfigured)
+ * - Lightweight live connectivity testing
  */
 
-import { CLOUDINARY_CONFIG, getCloudinaryStatus, initCloudinaryConfig } from '../config/cloudinaryConfig';
+import {
+  CLOUDINARY_CONFIG,
+  resolveCloudinaryConfig,
+  initCloudinaryConfig,
+  isPlaceholderValue,
+} from '../config/cloudinaryConfig';
 
 /**
  * Validates a file's format and size before upload to protect free-tier quotas.
@@ -27,13 +33,13 @@ export const validateMediaFile = ({ uri, size, type = 'image', name = '' }) => {
     if (size && size > CLOUDINARY_CONFIG.limits.maxImageBytes) {
       const maxMb = Math.round(CLOUDINARY_CONFIG.limits.maxImageBytes / (1024 * 1024));
       const actualMb = (size / (1024 * 1024)).toFixed(1);
-      throw new Error(`Image size (${actualMb} MB) exceeds free-tier limit of ${maxMb} MB. Please select a smaller photo.`);
+      throw new Error(`Image size (${actualMb} MB) exceeds limit of ${maxMb} MB. Please select a smaller photo.`);
     }
   } else if (type === 'video') {
     if (size && size > CLOUDINARY_CONFIG.limits.maxVideoBytes) {
       const maxMb = Math.round(CLOUDINARY_CONFIG.limits.maxVideoBytes / (1024 * 1024));
       const actualMb = (size / (1024 * 1024)).toFixed(1);
-      throw new Error(`Video size (${actualMb} MB) exceeds free-tier limit of ${maxMb} MB. Please compress or select a shorter video.`);
+      throw new Error(`Video size (${actualMb} MB) exceeds limit of ${maxMb} MB. Please compress or select a shorter video.`);
     }
   }
 
@@ -65,29 +71,28 @@ export const uploadToCloudinary = async ({
   // Ensure local config override is loaded
   await initCloudinaryConfig();
 
+  // 1. Resolve configuration with strict priority & placeholder detection
+  const config = resolveCloudinaryConfig();
+  if (!config.configured) {
+    throw new Error(
+      config.reason ||
+      'Cloudinary is not configured. Add your Cloud Name and Unsigned Upload Preset in Settings → Storage & Data → Cloudinary Setup.'
+    );
+  }
+
+  const cloudName = config.cloudName;
+  const uploadPreset = config.uploadPreset;
+
+  // 2. Client-side pre-validation of media size & type
+  validateMediaFile({
+    uri: fileUri,
+    size: fileSize,
+    type: resourceType,
+    name: fileName,
+  });
+
   return new Promise((resolve, reject) => {
     try {
-      // 1. Client-side pre-validation of media size & type
-      validateMediaFile({
-        uri: fileUri,
-        size: fileSize,
-        type: resourceType,
-        name: fileName,
-      });
-
-      const cloudName = CLOUDINARY_CONFIG.cloudName;
-      const uploadPreset = CLOUDINARY_CONFIG.uploadPreset;
-
-      // 2. Pre-check for placeholder credentials
-      const status = getCloudinaryStatus();
-      if (status.isPlaceholder) {
-        throw new Error(
-          `Cloudinary is not yet configured with your credentials.\n\n` +
-          `Current Cloud: "${cloudName}"\n` +
-          `Please add your Cloud Name and Unsigned Preset to your .env file or Settings -> Storage & Data -> Cloudinary Setup.`
-        );
-      }
-
       const uploadUrl = `https://api.cloudinary.com/v1_1/${cloudName}/${resourceType}/upload`;
 
       const xhr = new XMLHttpRequest();
@@ -139,36 +144,41 @@ export const uploadToCloudinary = async ({
             rawError = errorRes?.error?.message || '';
           } catch (_) {}
 
-          let errorDetail = `Cloudinary Error (HTTP ${xhr.status})`;
-          if (xhr.status === 401) {
-            errorDetail = `Cloudinary Authentication Error (HTTP 401): ${rawError || 'Unknown API key'}.\n` +
-              `The Cloud Name "${cloudName}" does not exist on Cloudinary or requires an API key.\n` +
-              `Please verify your Cloud Name in .env or Settings.`;
-          } else if (xhr.status === 400) {
-            if (rawError.toLowerCase().includes('preset')) {
-              errorDetail = `Cloudinary Preset Error (HTTP 400): ${rawError}.\n` +
-                `Ensure preset "${uploadPreset}" is created in Cloudinary Console (Settings -> Upload -> Upload presets) and its Signing Mode is set to "Unsigned".`;
-            } else {
-              errorDetail = `Cloudinary Request Error (HTTP 400): ${rawError || 'Invalid upload parameters'}`;
-            }
-          } else if (rawError) {
-            errorDetail = `Cloudinary Error (HTTP ${xhr.status}): ${rawError}`;
+          if (typeof __DEV__ !== 'undefined' && __DEV__) {
+            console.log('[Cloudinary] Upload failed with HTTP', xhr.status, 'Error:', rawError);
           }
 
-          const uploadErr = new Error(errorDetail);
+          let userFriendlyMessage = "Cloudinary isn't configured. Check Settings → Storage & Data → Cloudinary Setup.";
+
+          if (xhr.status === 401 || xhr.status === 403) {
+            userFriendlyMessage = 'Cloudinary rejected the Cloud Name. Check your Cloudinary configuration.';
+          } else if (xhr.status === 400) {
+            const lower = (rawError || '').toLowerCase();
+            if (lower.includes('preset') || lower.includes('unsigned')) {
+              userFriendlyMessage = 'Cloudinary rejected the upload preset. Make sure the preset is an unsigned upload preset.';
+            } else if (rawError) {
+              userFriendlyMessage = `Cloudinary rejected the upload: ${rawError}`;
+            }
+          } else if (xhr.status >= 500) {
+            userFriendlyMessage = 'Cloudinary service is temporarily unavailable. Please try again later.';
+          } else if (rawError) {
+            userFriendlyMessage = `Cloudinary Notice: ${rawError}`;
+          }
+
+          const uploadErr = new Error(userFriendlyMessage);
           uploadErr.statusCode = xhr.status;
           uploadErr.rawMessage = rawError;
           reject(uploadErr);
         }
       };
 
-      // 5. Handle network and cancellation errors
+      // 5. Handle network, timeout, and cancellation errors
       xhr.onerror = () => {
-        reject(new Error('Network error during upload. Please check your internet connection and try again.'));
+        reject(new Error("Couldn't connect to Cloudinary. Check your internet connection and try again."));
       };
 
       xhr.ontimeout = () => {
-        reject(new Error('Upload timed out. The file may be too large for your current connection.'));
+        reject(new Error('Upload timed out. Check your internet connection and try again.'));
       };
 
       xhr.onabort = () => {
@@ -177,7 +187,7 @@ export const uploadToCloudinary = async ({
         reject(cancelErr);
       };
 
-      // 6. Prepare FormData payload
+      // 6. Prepare FormData payload (Unsigned uploads only - STRICTLY NO api_key or api_secret)
       const formData = new FormData();
       formData.append('upload_preset', uploadPreset);
       if (folder) {
@@ -205,6 +215,120 @@ export const uploadToCloudinary = async ({
       xhr.send(formData);
     } catch (err) {
       reject(err);
+    }
+  });
+};
+
+/**
+ * Performs a real, lightweight live connection test against Cloudinary.
+ * Uploads a 43-byte transparent pixel data URI to verify Cloud Name and Unsigned Upload Preset.
+ * 
+ * @param {Object} [credentials]
+ * @param {string} [credentials.cloudName]
+ * @param {string} [credentials.uploadPreset]
+ * @returns {Promise<{ success: boolean, message: string, statusCode?: number }>}
+ */
+export const testCloudinaryConnection = async (credentials = {}) => {
+  let targetCloud = credentials?.cloudName?.trim();
+  let targetPreset = credentials?.uploadPreset?.trim();
+
+  // If credentials not passed directly, resolve from active config
+  if (!targetCloud || !targetPreset) {
+    await initCloudinaryConfig();
+    const config = resolveCloudinaryConfig();
+    if (!config.configured) {
+      return {
+        success: false,
+        message: 'Cloudinary is not configured. Please enter your Cloud Name and Unsigned Upload Preset first.',
+      };
+    }
+    targetCloud = config.cloudName;
+    targetPreset = config.uploadPreset;
+  }
+
+  if (isPlaceholderValue(targetCloud)) {
+    return {
+      success: false,
+      message: 'Please enter a valid Cloud Name (placeholder values like "filmroom_media" are not accepted).',
+    };
+  }
+
+  if (isPlaceholderValue(targetPreset)) {
+    return {
+      success: false,
+      message: 'Please enter a valid Unsigned Upload Preset (placeholder values like "filmroom_unsigned" are not accepted).',
+    };
+  }
+
+  return new Promise((resolve) => {
+    try {
+      const uploadUrl = `https://api.cloudinary.com/v1_1/${targetCloud}/image/upload`;
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', uploadUrl);
+      xhr.timeout = 15000; // 15 seconds test timeout
+
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          resolve({
+            success: true,
+            message: '✓ Cloudinary connection verified! Cloud Name and Unsigned Upload Preset are valid and accepting uploads.',
+            statusCode: xhr.status,
+          });
+        } else {
+          let rawError = '';
+          try {
+            const errRes = JSON.parse(xhr.responseText);
+            rawError = errRes?.error?.message || '';
+          } catch (_) {}
+
+          let message = 'Cloudinary rejected this configuration. Check the Cloud Name and Unsigned Upload Preset.';
+          if (xhr.status === 401) {
+            message = 'Cloudinary Cloud Name is invalid. Check your Cloudinary dashboard.';
+          } else if (xhr.status === 400) {
+            const lower = (rawError || '').toLowerCase();
+            if (lower.includes('preset') || lower.includes('unsigned')) {
+              message = 'Cloudinary upload preset is invalid or unavailable. Make sure the preset exists and is configured for unsigned uploads.';
+            } else if (rawError) {
+              message = `Cloudinary rejected preset: ${rawError}`;
+            }
+          }
+
+          resolve({
+            success: false,
+            message,
+            statusCode: xhr.status,
+          });
+        }
+      };
+
+      xhr.onerror = () => {
+        resolve({
+          success: false,
+          message: "Couldn't connect to Cloudinary. Check your internet connection and try again.",
+        });
+      };
+
+      xhr.ontimeout = () => {
+        resolve({
+          success: false,
+          message: 'Connection to Cloudinary timed out. Check your internet connection and try again.',
+        });
+      };
+
+      // Lightweight 1x1 transparent GIF base64 payload (43 bytes)
+      const tinyPixelDataUri = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+
+      const formData = new FormData();
+      formData.append('upload_preset', targetPreset);
+      formData.append('folder', 'filmroom_connectivity_test');
+      formData.append('file', tinyPixelDataUri);
+
+      xhr.send(formData);
+    } catch (err) {
+      resolve({
+        success: false,
+        message: err.message || 'Failed to initiate Cloudinary connection test.',
+      });
     }
   });
 };

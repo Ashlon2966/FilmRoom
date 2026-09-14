@@ -21,10 +21,12 @@ import {
   removeTalentFromShortlist,
 } from '../../services/shortlistService';
 import FilmmakerDetailModal from '../../components/FilmmakerDetailModal';
+import { useToast } from '../../context/ToastContext';
 
 export default function ShortlistsScreen({ navigation }) {
   const { theme } = useTheme();
   const { currentUser } = useAuth();
+  const { showToast } = useToast();
 
   const [shortlists, setShortlists] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -59,8 +61,9 @@ export default function ShortlistsScreen({ navigation }) {
       await createShortlist(currentUser.uid, { name: newListName.trim() });
       setNewListName('');
       setIsCreateModalOpen(false);
+      showToast({ type: 'success', message: 'Shortlist created' });
     } catch (err) {
-      Alert.alert('Error', err.message);
+      showToast({ type: 'error', message: err.message || "Couldn't create shortlist" });
     } finally {
       setIsCreating(false);
     }
@@ -80,6 +83,7 @@ export default function ShortlistsScreen({ navigation }) {
             if (selectedShortlist?.id === list.id) {
               setSelectedShortlist(null);
             }
+            showToast({ type: 'info', message: 'Shortlist deleted' });
           },
         },
       ]
@@ -90,8 +94,9 @@ export default function ShortlistsScreen({ navigation }) {
     if (!selectedShortlist) return;
     try {
       await removeTalentFromShortlist(currentUser.uid, selectedShortlist.id, talentUid);
+      showToast({ type: 'info', message: 'Removed from shortlist' });
     } catch (err) {
-      Alert.alert('Error', err.message);
+      showToast({ type: 'error', message: err.message || "Couldn't update shortlist" });
     }
   };
 
@@ -157,8 +162,8 @@ export default function ShortlistsScreen({ navigation }) {
                 }
                 activeOpacity={0.85}
               >
-                {item.photoURL ? (
-                  <Image source={{ uri: item.photoURL }} style={styles.avatar} />
+                {(item.photoURL || item.avatar) ? (
+                  <Image source={{ uri: item.photoURL || item.avatar }} style={styles.avatar} />
                 ) : (
                   <View style={[styles.avatarPlaceholder, { backgroundColor: theme.surface }]}>
                     <Text style={[styles.avatarInitial, { color: theme.primary }]}>
@@ -194,7 +199,7 @@ export default function ShortlistsScreen({ navigation }) {
                       name: item.name,
                       username: item.username,
                       role: item.role,
-                      photoURL: item.photoURL,
+                      photoURL: item.photoURL || item.avatar || null,
                       location: item.location,
                       unionStatus: item.unionStatus,
                     })

@@ -16,6 +16,8 @@ import { collection, addDoc, updateDoc, deleteDoc, doc, serverTimestamp } from '
 import { db } from '../../firebaseConfig';
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../context/ThemeContext';
+import { useToast } from '../context/ToastContext';
+import { useModal } from '../context/ModalContext';
 import { DateRangePickerField, SingleDatePickerField } from './CinemaDatePicker';
 import { uploadToCloudinary } from '../services/cloudinaryService';
 import AddCrewRoleModal from './AddCrewRoleModal';
@@ -31,9 +33,27 @@ const POST_TYPES = [
 
 const COMP_OPTIONS = ['Paid', 'Unpaid', 'Negotiable'];
 
+export const ACTOR_ROLE_POSITIONS = [
+  'Main Actor / Lead',
+  'Supporting / Side Actor',
+  'Antagonist / Villain',
+  'Cameo / Guest Star',
+  'Voiceover / ADR',
+  'Extra / Background',
+];
+
+export const ACTOR_GENDER_OPTIONS = [
+  'Any / All Genders',
+  'Female',
+  'Male',
+  'Non-Binary',
+];
+
 export default function PostProductionCallModal({ visible, onClose, onPublished, callToEdit }) {
   const { currentUser, userProfile } = useAuth();
   const { theme } = useTheme();
+  const { showToast } = useToast();
+  const { showConfirm } = useModal();
 
   // Step 1 (type selection) vs Step 2 (fill fields)
   const [selectedType, setSelectedType] = useState(null);
@@ -52,6 +72,13 @@ export default function PostProductionCallModal({ visible, onClose, onPublished,
   const [crewRolesRequired, setCrewRolesRequired] = useState([]);
   const [isAddRoleModalOpen, setIsAddRoleModalOpen] = useState(false);
 
+  // Actor / Casting Call specific fields
+  const [characterName, setCharacterName] = useState('');
+  const [rolePosition, setRolePosition] = useState('Main Actor / Lead');
+  const [genderPreference, setGenderPreference] = useState('Any / All Genders');
+  const [characterDescription, setCharacterDescription] = useState('');
+  const [draftScriptUrl, setDraftScriptUrl] = useState('');
+
   // Image upload
   const [attachedImageUri, setAttachedImageUri] = useState(null);
   const [attachedImageUrl, setAttachedImageUrl] = useState(null);
@@ -66,12 +93,39 @@ export default function PostProductionCallModal({ visible, onClose, onPublished,
       setLookingFor(callToEdit.lookingFor || callToEdit.roleName || '');
       setProjectName(callToEdit.projectName || callToEdit.title || '');
       setLocation(callToEdit.location || '');
-      setStartDate(callToEdit.startDate ? new Date(callToEdit.startDate) : null);
-      setEndDate(callToEdit.endDate ? new Date(callToEdit.endDate) : null);
-      setSingleDate(callToEdit.singleDate ? new Date(callToEdit.singleDate) : null);
+      const rawStart = callToEdit.startDate || (callToEdit.dates && callToEdit.dates.includes('–') ? callToEdit.dates.split('–')[0].trim() : null);
+      const rawEnd = callToEdit.endDate || (callToEdit.dates && callToEdit.dates.includes('–') ? callToEdit.dates.split('–')[1].trim() : null);
+      setStartDate(rawStart || null);
+      setEndDate(rawEnd || null);
+      setSingleDate(callToEdit.singleDate || null);
       setCompensation(callToEdit.compensationTier || callToEdit.compensation || 'Paid');
       setDescription(callToEdit.description || callToEdit.logline || '');
-      setCrewRolesRequired(callToEdit.crewRolesRequired || callToEdit.crewPositions || []);
+      
+      let initialRoles = [];
+      if (Array.isArray(callToEdit.crewRolesRequired) && callToEdit.crewRolesRequired.length > 0) {
+        initialRoles = callToEdit.crewRolesRequired;
+      } else if (Array.isArray(callToEdit.crewPositions) && callToEdit.crewPositions.length > 0) {
+        initialRoles = callToEdit.crewPositions.map((p) =>
+          typeof p === 'string' ? { role: p, quantity: 1, category: 'Crew' } : p
+        );
+      } else if (Array.isArray(callToEdit.neededRoles) && callToEdit.neededRoles.length > 0) {
+        initialRoles = callToEdit.neededRoles.map((r) => ({
+          role: typeof r === 'string' ? r : (r.role || 'Crew'),
+          quantity: r.quantity || 1,
+          category: r.category || 'Crew',
+          requirement: r.requirement || null,
+        }));
+      } else if (callToEdit.roleName || callToEdit.lookingFor) {
+        initialRoles = [{ role: callToEdit.roleName || callToEdit.lookingFor, quantity: 1, category: 'Crew' }];
+      }
+      setCrewRolesRequired(initialRoles);
+
+      // Casting Call fields
+      setCharacterName(callToEdit.characterName || callToEdit.lookingFor || callToEdit.roleName || '');
+      setRolePosition(callToEdit.rolePosition || 'Main Actor / Lead');
+      setGenderPreference(callToEdit.genderPreference || 'Any / All Genders');
+      setCharacterDescription(callToEdit.characterDescription || callToEdit.description || '');
+      setDraftScriptUrl(callToEdit.draftScriptUrl || callToEdit.scriptSidesUrl || '');
       setAttachedImageUrl(callToEdit.imageUrl || null);
       setAttachedImageUri(null);
       setIsPosting(false);
@@ -86,6 +140,11 @@ export default function PostProductionCallModal({ visible, onClose, onPublished,
       setCompensation('Paid');
       setDescription('');
       setCrewRolesRequired([]);
+      setCharacterName('');
+      setRolePosition('Main Actor / Lead');
+      setGenderPreference('Any / All Genders');
+      setCharacterDescription('');
+      setDraftScriptUrl('');
       setAttachedImageUri(null);
       setAttachedImageUrl(null);
       setIsUploadingImage(false);
@@ -136,39 +195,59 @@ export default function PostProductionCallModal({ visible, onClose, onPublished,
 
     if (selectedType === 'CREW_CALL') {
       if (crewRolesRequired.length === 0 && !lookingFor.trim()) {
-        Alert.alert('Required', 'Please add at least one required crew role using "+ Add Role".');
+        showToast({ type: 'warning', message: 'Please add at least one required crew role using "+ Add Role".' });
         return;
       }
       if (!projectName.trim()) {
-        Alert.alert('Required', 'Please specify the project name.');
+        showToast({ type: 'warning', message: 'Please specify the project name.' });
         return;
       }
     }
-    if (selectedType === 'CASTING_CALL' && (!lookingFor.trim() || !projectName.trim())) {
-      Alert.alert('Required', 'Please specify the character/role and the project name.');
-      return;
+    if (selectedType === 'CASTING_CALL') {
+      const activeChar = characterName.trim() || lookingFor.trim();
+      if (!activeChar || !projectName.trim()) {
+        showToast({ type: 'warning', message: 'Please specify the character/role name and the project name.' });
+        return;
+      }
     }
     if (selectedType === 'PRODUCTION_UPDATE' && (!projectName.trim() || !description.trim())) {
-      Alert.alert('Required', 'Please specify the project and your update message.');
+      showToast({ type: 'warning', message: 'Please specify the project and your update message.' });
       return;
     }
 
     setIsPosting(true);
     try {
       const typeConfig = POST_TYPES.find((t) => t.key === selectedType) || POST_TYPES[0];
+      const isCasting = selectedType === 'CASTING_CALL';
+      const activeCharName = characterName.trim() || lookingFor.trim();
 
-      const primaryRoleTitle =
-        crewRolesRequired.length > 0
-          ? crewRolesRequired.map((r) => `${r.role} (${r.quantity})`).join(', ')
-          : lookingFor.trim();
+      const primaryRoleTitle = isCasting
+        ? `${activeCharName} (${rolePosition})`
+        : crewRolesRequired.length > 0
+        ? crewRolesRequired.map((r) => `${r.role} (${r.quantity})`).join(', ')
+        : lookingFor.trim();
 
       const postData = {
         postType: selectedType,
         postTypeLabel: typeConfig.title,
         title: projectName.trim() || primaryRoleTitle,
         roleName: primaryRoleTitle || null,
+        // Casting Call structured attributes
+        ...(isCasting
+          ? {
+              characterName: activeCharName,
+              rolePosition,
+              genderPreference,
+              characterDescription: (characterDescription.trim() || description.trim()),
+              draftScriptUrl: draftScriptUrl.trim() || null,
+              scriptSidesUrl: draftScriptUrl.trim() || null,
+              hasDraftScript: !!draftScriptUrl.trim(),
+            }
+          : {}),
         crewRolesRequired,
-        neededRoles: crewRolesRequired.length > 0
+        neededRoles: isCasting
+          ? [primaryRoleTitle]
+          : crewRolesRequired.length > 0
           ? crewRolesRequired.map((r) => r.role)
           : (lookingFor.trim() ? [lookingFor.trim()] : []),
         location: location.trim() || 'Worldwide',
@@ -176,8 +255,12 @@ export default function PostProductionCallModal({ visible, onClose, onPublished,
         endDate: endDate || null,
         dates: startDate && endDate ? `${startDate} – ${endDate}` : (startDate || singleDate || 'TBD'),
         compensationTier: compensation,
-        logline: description.trim() || '',
-        description: description.trim() || '',
+        logline: isCasting
+          ? (characterDescription.trim() || description.trim() || '')
+          : (description.trim() || ''),
+        description: isCasting
+          ? (characterDescription.trim() || description.trim() || '')
+          : (description.trim() || ''),
         imageUrl: attachedImageUrl || null,
         director: userProfile?.fullName || userProfile?.displayName || 'Filmmaker',
         createdBy: currentUser?.uid || 'guest',
@@ -190,8 +273,22 @@ export default function PostProductionCallModal({ visible, onClose, onPublished,
           postTypeLabel: typeConfig.title,
           title: projectName.trim() || primaryRoleTitle,
           roleName: primaryRoleTitle || null,
+          ...(isCasting
+            ? {
+                characterName: activeCharName,
+                rolePosition,
+                genderPreference,
+                characterDescription: (characterDescription.trim() || description.trim()),
+                draftScriptUrl: draftScriptUrl.trim() || null,
+                scriptSidesUrl: draftScriptUrl.trim() || null,
+                hasDraftScript: !!draftScriptUrl.trim(),
+              }
+            : {}),
           crewRolesRequired,
-          neededRoles: crewRolesRequired.length > 0
+          crewPositions: crewRolesRequired,
+          neededRoles: isCasting
+            ? [primaryRoleTitle]
+            : crewRolesRequired.length > 0
             ? crewRolesRequired.map((r) => r.role)
             : (lookingFor.trim() ? [lookingFor.trim()] : []),
           location: location.trim() || 'Worldwide',
@@ -199,23 +296,27 @@ export default function PostProductionCallModal({ visible, onClose, onPublished,
           endDate: endDate || null,
           dates: startDate && endDate ? `${startDate} – ${endDate}` : (startDate || singleDate || 'TBD'),
           compensationTier: compensation,
-          logline: description.trim() || '',
-          description: description.trim() || '',
+          logline: isCasting
+            ? (characterDescription.trim() || description.trim() || '')
+            : (description.trim() || ''),
+          description: isCasting
+            ? (characterDescription.trim() || description.trim() || '')
+            : (description.trim() || ''),
           imageUrl: attachedImageUrl || null,
           updatedAt: serverTimestamp(),
         };
 
         await updateDoc(doc(db, 'production_calls', callToEdit.id), updateData);
-        Alert.alert('✓ Call Updated', 'Your crew call changes have been published to The Board.');
+        showToast({ type: 'success', title: 'Call Updated', message: 'Your production call changes have been published to The Board.' });
       } else {
         await addDoc(collection(db, 'production_calls'), postData);
-        Alert.alert('✓ Published', 'Your post is now live on The Board!');
+        showToast({ type: 'success', title: 'Published', message: 'Your post is now live on The Board!' });
       }
 
       onClose();
       if (onPublished) onPublished();
     } catch (err) {
-      Alert.alert('Publishing Error', err.message);
+      showToast({ type: 'error', title: 'Publishing Error', message: err.message || 'Failed to publish.' });
     } finally {
       setIsPosting(false);
     }
@@ -223,27 +324,23 @@ export default function PostProductionCallModal({ visible, onClose, onPublished,
 
   const handleDeleteCall = () => {
     if (!callToEdit?.id) return;
-    Alert.alert(
-      'Delete Crew Call',
-      'Are you sure you want to permanently remove this crew call from The Board?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              await deleteDoc(doc(db, 'production_calls', callToEdit.id));
-              Alert.alert('✓ Deleted', 'Crew call removed from The Board.');
-              onClose();
-              if (onPublished) onPublished();
-            } catch (e) {
-              Alert.alert('Error', e.message);
-            }
-          },
-        },
-      ]
-    );
+    showConfirm({
+      title: 'Delete Crew Call?',
+      description: 'Are you sure you want to permanently remove this crew call from The Board?',
+      confirmLabel: 'Delete Call',
+      cancelLabel: 'Cancel',
+      isDestructive: true,
+      onConfirm: async () => {
+        try {
+          await deleteDoc(doc(db, 'production_calls', callToEdit.id));
+          showToast({ type: 'info', title: 'Deleted', message: 'Crew call removed from The Board.' });
+          onClose();
+          if (onPublished) onPublished();
+        } catch (e) {
+          showToast({ type: 'error', message: e.message || 'Failed to delete call.' });
+        }
+      },
+    });
   };
 
   return (
@@ -433,24 +530,77 @@ export default function PostProductionCallModal({ visible, onClose, onPublished,
               {/* CASTING CALL FIELDS */}
               {selectedType === 'CASTING_CALL' && (
                 <>
-                  <Text style={[styles.inputLabel, { color: theme.textSecondary }]}>ROLE / CHARACTER</Text>
-                  <TextInput
-                    style={[styles.input, { backgroundColor: theme.background, color: theme.text, borderColor: theme.cardBorder }]}
-                    placeholder="e.g. Lead Detective (30–40s), Supporting Antagonist"
-                    placeholderTextColor={theme.textMuted}
-                    value={lookingFor}
-                    onChangeText={setLookingFor}
-                    autoFocus
-                  />
-
-                  <Text style={[styles.inputLabel, { color: theme.textSecondary, marginTop: 12 }]}>PROJECT</Text>
+                  <Text style={[styles.inputLabel, { color: theme.textSecondary }]}>PROJECT NAME *</Text>
                   <TextInput
                     style={[styles.input, { backgroundColor: theme.background, color: theme.text, borderColor: theme.cardBorder }]}
                     placeholder="e.g. Whispers of the Coast"
                     placeholderTextColor={theme.textMuted}
                     value={projectName}
                     onChangeText={setProjectName}
+                    autoFocus
                   />
+
+                  <Text style={[styles.inputLabel, { color: theme.textSecondary, marginTop: 12 }]}>CHARACTER / ROLE NAME *</Text>
+                  <TextInput
+                    style={[styles.input, { backgroundColor: theme.background, color: theme.text, borderColor: theme.cardBorder }]}
+                    placeholder="e.g. Detective Marcus Vance"
+                    placeholderTextColor={theme.textMuted}
+                    value={characterName}
+                    onChangeText={(txt) => {
+                      setCharacterName(txt);
+                      setLookingFor(txt);
+                    }}
+                  />
+
+                  {/* Role Position */}
+                  <Text style={[styles.inputLabel, { color: theme.textSecondary, marginTop: 12 }]}>ROLE POSITION / IMPORTANCE</Text>
+                  <View style={styles.wrapChipRow}>
+                    {ACTOR_ROLE_POSITIONS.map((pos) => {
+                      const isSelected = rolePosition === pos;
+                      return (
+                        <TouchableOpacity
+                          key={pos}
+                          style={[
+                            styles.smallChip,
+                            {
+                              backgroundColor: isSelected ? theme.accent : theme.background,
+                              borderColor: isSelected ? theme.accent : theme.cardBorder,
+                            },
+                          ]}
+                          onPress={() => setRolePosition(pos)}
+                        >
+                          <Text style={[styles.smallChipText, { color: isSelected ? '#000000' : theme.textSecondary }]}>
+                            {pos}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+
+                  {/* Gender / Demographic Requirement */}
+                  <Text style={[styles.inputLabel, { color: theme.textSecondary, marginTop: 12 }]}>DEMOGRAPHIC / GENDER REQUIREMENT</Text>
+                  <View style={styles.wrapChipRow}>
+                    {ACTOR_GENDER_OPTIONS.map((g) => {
+                      const isSelected = genderPreference === g;
+                      return (
+                        <TouchableOpacity
+                          key={g}
+                          style={[
+                            styles.smallChip,
+                            {
+                              backgroundColor: isSelected ? theme.accent : theme.background,
+                              borderColor: isSelected ? theme.accent : theme.cardBorder,
+                            },
+                          ]}
+                          onPress={() => setGenderPreference(g)}
+                        >
+                          <Text style={[styles.smallChipText, { color: isSelected ? '#000000' : theme.textSecondary }]}>
+                            {g}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
 
                   <Text style={[styles.inputLabel, { color: theme.textSecondary, marginTop: 12 }]}>LOCATION</Text>
                   <TextInput
@@ -497,16 +647,36 @@ export default function PostProductionCallModal({ visible, onClose, onPublished,
                     })}
                   </View>
 
-                  <Text style={[styles.inputLabel, { color: theme.textSecondary, marginTop: 12 }]}>CHARACTER BREAKDOWN</Text>
+                  <Text style={[styles.inputLabel, { color: theme.textSecondary, marginTop: 12 }]}>CHARACTER DESCRIPTION & TRAITS</Text>
                   <TextInput
-                    style={[styles.textArea, { backgroundColor: theme.background, color: theme.text, borderColor: theme.cardBorder }]}
-                    placeholder="Describe character motivations, demeanor, accent, or background..."
+                    style={[styles.textArea, { backgroundColor: theme.background, color: theme.text, borderColor: theme.cardBorder, height: 90 }]}
+                    placeholder="Describe character motivations, demeanor, accent, age range, or background..."
                     placeholderTextColor={theme.textMuted}
-                    value={description}
-                    onChangeText={setDescription}
+                    value={characterDescription}
+                    onChangeText={(txt) => {
+                      setCharacterDescription(txt);
+                      setDescription(txt);
+                    }}
                     multiline
-                    numberOfLines={3}
+                    numberOfLines={4}
                   />
+
+                  {/* Draft Script / Sides Attachment */}
+                  <Text style={[styles.inputLabel, { color: theme.textSecondary, marginTop: 12 }]}>DRAFT SCRIPT / SIDES LINK (OPTIONAL)</Text>
+                  <TextInput
+                    style={[styles.input, { backgroundColor: theme.background, color: theme.text, borderColor: theme.cardBorder }]}
+                    placeholder="e.g. https://drive.google.com/sides.pdf or Cloudinary URL"
+                    placeholderTextColor={theme.textMuted}
+                    value={draftScriptUrl}
+                    onChangeText={setDraftScriptUrl}
+                    autoCapitalize="none"
+                  />
+                  <View style={[styles.privacyCallout, { backgroundColor: theme.surface, borderColor: theme.cardBorder }]}>
+                    <Text style={{ fontSize: 11, color: theme.primary, fontWeight: '700' }}>🔒 SCRIPT PRIVACY SAFEGUARD</Text>
+                    <Text style={{ fontSize: 11, color: theme.textMuted, marginTop: 2, lineHeight: 15 }}>
+                      To protect your production screenplay, this draft script will remain locked on The Board. It will only be unlocked for an actor when you confirm their request to join.
+                    </Text>
+                  </View>
                 </>
               )}
 
@@ -833,5 +1003,28 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '800',
     letterSpacing: 0.3,
+  },
+  wrapChipRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 4,
+  },
+  smallChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 14,
+    borderWidth: 1,
+  },
+  smallChipText: {
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  privacyCallout: {
+    borderRadius: 8,
+    borderWidth: 1,
+    padding: 10,
+    marginTop: 8,
+    marginBottom: 8,
   },
 });

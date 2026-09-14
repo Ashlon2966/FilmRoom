@@ -44,18 +44,23 @@ export const AuthProvider = ({ children }) => {
   }, []);
 
   // Register user and seed the base user document in Firestore
-  const signup = async (email, password) => {
+  const signup = async (email, password, fullName = '', username = '') => {
     const cred = await createUserWithEmailAndPassword(auth, email, password);
     const userDocRef = doc(db, 'users', cred.user.uid);
+    const cleanUsername = username.trim().replace('@', '') || `filmmaker_${cred.user.uid.slice(0, 5)}`;
     await setDoc(userDocRef, {
       uid: cred.user.uid,
       email: cred.user.email,
-      displayName: '',
+      fullName: fullName.trim() || '',
+      displayName: fullName.trim() || '',
+      username: cleanUsername,
+      usernameLower: cleanUsername.toLowerCase(),
       bio: '',
       photoURL: null,
       roles: [],
       isOnboarded: false,
       createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
     });
     return cred.user;
   };

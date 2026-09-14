@@ -26,6 +26,8 @@ export const NOTIFICATION_TYPES = {
   REQUEST_DECLINED: 'REQUEST_DECLINED',
   REEL_SUBMITTED: 'REEL_SUBMITTED',
   CREW_CALL_UPDATE: 'CREW_CALL_UPDATE',
+  SCRIPT_SHARED: 'SCRIPT_SHARED',
+  CASTING_ACCEPTED: 'CASTING_ACCEPTED',
   SYSTEM: 'SYSTEM',
 };
 
@@ -41,7 +43,6 @@ export function streamNotifications(userId, onUpdate, onError) {
   const q = query(
     collection(db, 'notifications'),
     where('recipientUid', '==', userId),
-    orderBy('createdAt', 'desc'),
     limit(50)
   );
 
@@ -53,6 +54,12 @@ export function streamNotifications(userId, onUpdate, onError) {
         ...d.data(),
         createdAt: d.data().createdAt?.toDate ? d.data().createdAt.toDate() : new Date(),
       }));
+      // Sort in-memory to avoid requiring a composite index on Firestore Spark
+      list.sort((a, b) => {
+        const timeA = a.createdAt instanceof Date ? a.createdAt.getTime() : 0;
+        const timeB = b.createdAt instanceof Date ? b.createdAt.getTime() : 0;
+        return timeB - timeA;
+      });
       onUpdate(list);
     },
     (err) => {

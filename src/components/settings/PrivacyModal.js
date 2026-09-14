@@ -10,6 +10,7 @@ import {
   Alert,
 } from 'react-native';
 import { useTheme } from '../../context/ThemeContext';
+import { useToast } from '../../context/ToastContext';
 
 const VISIBILITY_MODES = [
   { key: 'PUBLIC', label: 'Public', desc: 'Visible in Explore directory to all verified filmmakers' },
@@ -31,6 +32,7 @@ const DEFAULT_PRIVACY = {
 
 export default function PrivacyModal({ visible, onClose, navigation }) {
   const { theme } = useTheme();
+  const { showToast } = useToast();
 
   // Saved privacy settings & draft staging
   const [savedSettings, setSavedSettings] = useState(DEFAULT_PRIVACY);
@@ -48,7 +50,7 @@ export default function PrivacyModal({ visible, onClose, navigation }) {
 
   const handleSave = () => {
     setSavedSettings(draftSettings);
-    Alert.alert('✓ Privacy Updated', 'Your profile visibility and contact privacy settings have been saved.');
+    showToast({ type: 'success', title: 'Privacy Updated', message: 'Profile visibility and contact privacy settings saved.' });
     onClose();
   };
 
@@ -59,7 +61,7 @@ export default function PrivacyModal({ visible, onClose, navigation }) {
 
   const handleRestoreDefaults = () => {
     setDraftSettings(DEFAULT_PRIVACY);
-    Alert.alert('Defaults Restored', 'Privacy settings reset to factory defaults.');
+    showToast({ type: 'info', message: 'Privacy settings reset to factory defaults.' });
   };
 
   return (

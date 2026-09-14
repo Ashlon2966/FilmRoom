@@ -7,9 +7,9 @@ import {
   TouchableOpacity,
   ScrollView,
   TextInput,
-  Alert,
 } from 'react-native';
 import { useTheme } from '../context/ThemeContext';
+import { useToast } from '../context/ToastContext';
 
 export const CREW_CATEGORIES = [
   {
@@ -61,6 +61,7 @@ export const CREW_CATEGORIES = [
 
 export default function AddCrewRoleModal({ visible, onClose, onAddRole }) {
   const { theme } = useTheme();
+  const { showToast } = useToast();
 
   const [selectedCategory, setSelectedCategory] = useState('Camera');
   const [selectedRole, setSelectedRole] = useState('Cinematographer');
@@ -80,7 +81,7 @@ export default function AddCrewRoleModal({ visible, onClose, onAddRole }) {
   const handleConfirm = () => {
     const finalRole = selectedRole === 'Custom...' ? customRole.trim() : selectedRole;
     if (!finalRole) {
-      Alert.alert('Role Required', 'Please choose a role or type a custom craft title.');
+      showToast({ type: 'warning', message: 'Please choose a role or type a custom craft title.' });
       return;
     }
 

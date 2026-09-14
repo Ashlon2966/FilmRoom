@@ -67,8 +67,8 @@ export default function TalentCard({ talent, onInquire, onViewReel, onPressProfi
 
       {/* Profile Header */}
       <View style={styles.profileRow}>
-        {talent.avatar ? (
-          <Image source={{ uri: talent.avatar }} style={styles.avatar} />
+        {(talent.photoURL || talent.avatar) ? (
+          <Image source={{ uri: talent.photoURL || talent.avatar }} style={styles.avatar} />
         ) : (
           <View style={[styles.avatarPlaceholder, { backgroundColor: theme.surface }]}>
             <Text style={[styles.avatarInitial, { color: theme.primary }]}>

@@ -6,6 +6,7 @@ import {
   ScrollView,
   TouchableOpacity,
   Alert,
+  Image,
 } from 'react-native';
 import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
@@ -22,6 +23,7 @@ import SecurityModal from '../../components/settings/SecurityModal';
 import ConnectedAppsModal from '../../components/settings/ConnectedAppsModal';
 import ProfilesPreviewModal from '../../components/settings/ProfilesPreviewModal';
 import AboutModal from '../../components/settings/AboutModal';
+import ProfileInfoModal from '../../components/settings/ProfileInfoModal';
 
 export default function SettingsScreen({ navigation }) {
   const { currentUser, userProfile, logout } = useAuth();
@@ -59,10 +61,14 @@ export default function SettingsScreen({ navigation }) {
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         {/* User Identity Banner */}
         <View style={[styles.userBanner, { backgroundColor: theme.card, borderColor: theme.cardBorder }]}>
-          <View style={[styles.avatarBadge, { backgroundColor: theme.surface, borderColor: theme.primary }]}>
-            <Text style={[styles.avatarInitial, { color: theme.primary }]}>
-              {userProfile?.fullName ? userProfile.fullName[0].toUpperCase() : 'F'}
-            </Text>
+          <View style={[styles.avatarBadge, { backgroundColor: theme.surface, borderColor: theme.primary, overflow: 'hidden' }]}>
+            {(userProfile?.photoURL || currentUser?.photoURL) ? (
+              <Image source={{ uri: userProfile?.photoURL || currentUser?.photoURL }} style={styles.avatarImage} resizeMode="cover" />
+            ) : (
+              <Text style={[styles.avatarInitial, { color: theme.primary }]}>
+                {userProfile?.fullName ? userProfile.fullName[0].toUpperCase() : 'F'}
+              </Text>
+            )}
           </View>
           <View style={styles.userInfo}>
             <Text style={[styles.userName, { color: theme.text }]}>
@@ -82,14 +88,31 @@ export default function SettingsScreen({ navigation }) {
         <View style={[styles.sectionGroup, { backgroundColor: theme.card, borderColor: theme.cardBorder }]}>
           <TouchableOpacity
             style={styles.settingItem}
+            onPress={() => setActiveModal('PROFILE_INFO')}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.itemIcon}>✏️</Text>
+            <View style={styles.itemTextCol}>
+              <Text style={[styles.itemTitle, { color: theme.text }]}>Edit Profile Details</Text>
+              <Text style={[styles.itemSubtitle, { color: theme.textMuted }]}>
+                Roles hierarchy, contact country code, location & bio
+              </Text>
+            </View>
+            <Text style={[styles.itemArrow, { color: theme.primary }]}>→</Text>
+          </TouchableOpacity>
+
+          <View style={styles.divider} />
+
+          <TouchableOpacity
+            style={styles.settingItem}
             onPress={() => navigation.navigate('ProfileMain')}
             activeOpacity={0.7}
           >
             <Text style={styles.itemIcon}>👤</Text>
             <View style={styles.itemTextCol}>
-              <Text style={[styles.itemTitle, { color: theme.text }]}>Profile & Identity</Text>
+              <Text style={[styles.itemTitle, { color: theme.text }]}>Public Profile View</Text>
               <Text style={[styles.itemSubtitle, { color: theme.textMuted }]}>
-                Manage your professional identity & credits
+                Preview your portfolio card & FilmRoom ID
               </Text>
             </View>
             <Text style={[styles.itemArrow, { color: theme.primary }]}>→</Text>
@@ -292,6 +315,11 @@ export default function SettingsScreen({ navigation }) {
       <ConnectedAppsModal visible={activeModal === 'CONNECTED_APPS'} onClose={() => setActiveModal(null)} />
       <ProfilesPreviewModal visible={activeModal === 'PROFILES'} onClose={() => setActiveModal(null)} />
       <AboutModal visible={activeModal === 'ABOUT'} onClose={() => setActiveModal(null)} />
+      <ProfileInfoModal
+        visible={activeModal === 'PROFILE_INFO'}
+        onClose={() => setActiveModal(null)}
+        onSaved={() => setActiveModal(null)}
+      />
     </View>
   );
 }
@@ -334,6 +362,11 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 14,
+  },
+  avatarImage: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 24,
   },
   avatarInitial: {
     fontSize: 22,

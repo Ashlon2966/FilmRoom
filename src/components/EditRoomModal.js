@@ -10,13 +10,15 @@ import {
   Image,
   Alert,
   ActivityIndicator,
-  Platform,
+  Pressable,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
-import { doc, updateDoc, serverTimestamp } from 'firebase/firestore';
+import { doc, updateDoc, deleteDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../../firebaseConfig';
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../context/ThemeContext';
+import { useToast } from '../context/ToastContext';
+import { useModal } from '../context/ModalContext';
 import { DateRangePickerField } from './CinemaDatePicker';
 import { uploadToCloudinary } from '../services/cloudinaryService';
 
@@ -26,20 +28,22 @@ const PROJECT_TYPES = [
   'Series',
   'Music Video',
   'Commercial',
+  'Documentary',
   'Other',
 ];
 
-const BUDGET_TIERS = [
-  'Micro Budget (<$50k)',
-  'Indie ($50k - $250k)',
-  'Low Budget ($250k - $1M)',
-  'Mid Budget ($1M - $5M)',
-  'Studio / High Budget ($5M+)',
+const ROOM_VISIBILITY_OPTIONS = [
+  { key: 'PUBLIC', label: 'Public', desc: 'Discoverable across FilmRoom directory & The Board' },
+  { key: 'MEMBERS', label: 'FilmRoom Members', desc: 'Visible only to signed-in FilmRoom members' },
+  { key: 'INVITED', label: 'Invited People', desc: 'Accessible only to invited collaborators' },
+  { key: 'PRIVATE', label: 'Private', desc: 'Strictly confidential to room personnel' },
 ];
 
-export default function EditRoomModal({ visible, roomId, roomData, onClose, onUpdated }) {
-  const { currentUser } = useAuth();
+export default function EditRoomModal({ visible, roomId, roomData, onClose, onUpdated, onDeleted }) {
+  const { currentUser, userProfile } = useAuth();
   const { theme } = useTheme();
+  const { showToast } = useToast();
+  const { showConfirm } = useModal();
 
   const [title, setTitle] = useState('');
   const [projectType, setProjectType] = useState('Short Film');
@@ -48,13 +52,19 @@ export default function EditRoomModal({ visible, roomId, roomData, onClose, onUp
   const [shootStartDate, setShootStartDate] = useState(null);
   const [shootEndDate, setShootEndDate] = useState(null);
   const [location, setLocation] = useState('');
-  const [budgetTier, setBudgetTier] = useState('Indie ($50k - $250k)');
+  const [visibility, setVisibility] = useState('PUBLIC');
+  const [roomStatus, setRoomStatus] = useState('ACTIVE');
+
+  // Crew Requirements
+  const [crewRequirements, setCrewRequirements] = useState([]);
+  const [newRoleDept, setNewRoleDept] = useState('Camera');
+  const [newRoleTitle, setNewRoleTitle] = useState('');
+  const [newRoleQty, setNewRoleQty] = useState(1);
 
   const [posterUri, setPosterUri] = useState(null);
   const [posterUrl, setPosterUrl] = useState(null);
   const [posterMetadata, setPosterMetadata] = useState(null);
   const [isUploadingPoster, setIsUploadingPoster] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState(0);
   const [isSaving, setIsSaving] = useState(false);
 
   // Check authorization: creator, owner, or manager
@@ -75,7 +85,9 @@ export default function EditRoomModal({ visible, roomId, roomData, onClose, onUp
       setShootStartDate(roomData.shootStartDate ? new Date(roomData.shootStartDate) : null);
       setShootEndDate(roomData.shootEndDate ? new Date(roomData.shootEndDate) : null);
       setLocation(roomData.location || '');
-      setBudgetTier(roomData.budgetTier || 'Indie ($50k - $250k)');
+      setVisibility(roomData.visibility || 'PUBLIC');
+      setRoomStatus(roomData.status || 'ACTIVE');
+      setCrewRequirements(roomData.crewRequirements || []);
       setPosterUrl(roomData.posterUrl || null);
       setPosterMetadata(roomData.posterMetadata || null);
       setPosterUri(null);
@@ -86,7 +98,7 @@ export default function EditRoomModal({ visible, roomId, roomData, onClose, onUp
     try {
       const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (!perm.granted) {
-        Alert.alert('Permission Denied', 'Camera roll access is needed to select a project poster.');
+        showToast({ type: 'warning', message: 'Camera roll access is needed to select a project poster.' });
         return;
       }
 
@@ -101,7 +113,6 @@ export default function EditRoomModal({ visible, roomId, roomData, onClose, onUp
         const asset = result.assets[0];
         setPosterUri(asset.uri);
         setIsUploadingPoster(true);
-        setUploadProgress(0);
 
         const mediaRef = await uploadToCloudinary({
           fileUri: asset.uri,
@@ -109,26 +120,44 @@ export default function EditRoomModal({ visible, roomId, roomData, onClose, onUp
           fileName: asset.fileName || `${title || 'project'}_poster.jpg`,
           fileSize: asset.fileSize,
           folder: 'filmroom_posters',
-          onProgress: (p) => setUploadProgress(p),
         });
 
         setPosterUrl(mediaRef.secureUrl);
         setPosterMetadata(mediaRef);
+        showToast({ type: 'success', message: 'Poster uploaded successfully' });
       }
     } catch (err) {
-      Alert.alert('Poster Upload Notice', err.message || 'Could not upload poster to Cloudinary.');
+      showToast({ type: 'error', message: err.message || 'Could not upload poster.' });
     } finally {
       setIsUploadingPoster(false);
     }
   };
 
-  const handleSaveRoom = async () => {
-    if (!title.trim()) {
-      Alert.alert('Required', 'Please enter a project name.');
+  const handleAddRequirement = () => {
+    if (!newRoleTitle.trim()) {
+      showToast({ type: 'warning', message: 'Please enter a craft title.' });
       return;
     }
-    if (!canEdit) {
-      Alert.alert('Access Denied', 'Only the Production Owner or Manager can edit room details.');
+    const newReq = {
+      id: Date.now().toString(),
+      department: newRoleDept,
+      role: newRoleTitle.trim(),
+      quantity: Math.max(1, parseInt(newRoleQty, 10) || 1),
+      requirement: '',
+    };
+    setCrewRequirements((prev) => [...prev, newReq]);
+    setNewRoleTitle('');
+    setNewRoleQty(1);
+    showToast({ type: 'info', message: `Added ${newReq.role} to crew requirements` });
+  };
+
+  const handleRemoveRequirement = (id) => {
+    setCrewRequirements((prev) => prev.filter((r) => r.id !== id));
+  };
+
+  const handleSaveRoom = async () => {
+    if (!title.trim()) {
+      showToast({ type: 'warning', message: 'Please enter a production title.' });
       return;
     }
 
@@ -140,126 +169,182 @@ export default function EditRoomModal({ visible, roomId, roomData, onClose, onUp
         projectType,
         logline: logline.trim() || null,
         synopsis: synopsis.trim() || null,
-        description: synopsis.trim() || null,
-        shootStartDate: shootStartDate ? shootStartDate.toISOString() : null,
-        shootEndDate: shootEndDate ? shootEndDate.toISOString() : null,
+        shootStartDate: shootStartDate ? shootStartDate.toISOString().split('T')[0] : null,
+        shootEndDate: shootEndDate ? shootEndDate.toISOString().split('T')[0] : null,
         location: location.trim() || null,
-        budgetTier,
-        posterUrl: posterUrl || null,
-        posterMetadata: posterMetadata || null,
+        visibility,
+        status: roomStatus,
+        crewRequirements,
         updatedAt: serverTimestamp(),
       };
 
+      if (posterUrl) {
+        updatePayload.posterUrl = posterUrl;
+        updatePayload.posterMetadata = posterMetadata;
+      }
+
       await updateDoc(roomRef, updatePayload);
-      Alert.alert('✓ Room Updated', 'Production Room details have been saved.');
+
+      showToast({ type: 'success', title: 'Room Updated', message: 'Changes have been committed to this production.' });
       if (onUpdated) onUpdated();
       onClose();
     } catch (err) {
-      Alert.alert('Update Failed', err.message || 'Unable to update production room.');
+      showToast({ type: 'error', title: 'Save Failed', message: err.message || 'Failed to save changes.' });
     } finally {
       setIsSaving(false);
     }
   };
 
+  const handleToggleArchive = async () => {
+    const isArchived = roomStatus === 'ARCHIVED';
+    const newStatus = isArchived ? 'ACTIVE' : 'ARCHIVED';
+    showConfirm({
+      title: isArchived ? 'Restore Room?' : 'Archive Room?',
+      description: isArchived
+        ? 'Restore this production room to active status?'
+        : 'Archiving hides the room from active production lists without deleting its assets or slate data.',
+      confirmLabel: isArchived ? 'Restore Room' : 'Archive Room',
+      cancelLabel: 'Cancel',
+      onConfirm: async () => {
+        try {
+          await updateDoc(doc(db, 'rooms', roomId), {
+            status: newStatus,
+            updatedAt: serverTimestamp(),
+          });
+          setRoomStatus(newStatus);
+          if (onUpdated) onUpdated();
+          showToast({ type: 'info', message: `Production Room is now ${newStatus.toLowerCase()}.` });
+        } catch (err) {
+          showToast({ type: 'error', message: err.message || 'Action failed.' });
+        }
+      },
+    });
+  };
+
+  const handleDeleteRoom = () => {
+    showConfirm({
+      title: 'Delete Production Room?',
+      description: `This action cannot be easily undone. All slate takes, stage assets, and production notes for "${title}" will be permanently removed.`,
+      confirmLabel: 'Delete Room',
+      cancelLabel: 'Cancel',
+      isDestructive: true,
+      onConfirm: async () => {
+        try {
+          await deleteDoc(doc(db, 'rooms', roomId));
+          showToast({ type: 'info', title: 'Room Deleted', message: 'Production room has been permanently removed.' });
+          if (onDeleted) onDeleted();
+          onClose();
+        } catch (err) {
+          showToast({ type: 'error', message: err.message || 'Failed to delete room.' });
+        }
+      },
+    });
+  };
+
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
-      <View style={styles.overlay}>
-        <View style={[styles.modalCard, { backgroundColor: theme?.surface || '#181b1f', borderColor: theme?.cardBorder || '#242830' }]}>
+      <Pressable style={styles.backdrop} onPress={onClose}>
+        <Pressable
+          style={[styles.card, { backgroundColor: theme.card, borderColor: theme.cardBorder }]}
+          onPress={(e) => e.stopPropagation()}
+        >
           {/* Top Bar */}
-          <View style={styles.topRow}>
-            <View>
-              <Text style={[styles.title, { color: theme?.text || '#ffffff' }]}>EDIT PRODUCTION ROOM</Text>
-              <Text style={[styles.subtitle, { color: theme?.textSecondary || '#9ca3af' }]}>
-                Update project metadata, dates & poster
-              </Text>
-            </View>
-            <TouchableOpacity onPress={onClose} style={styles.closeBtn}>
-              <Text style={{ color: theme?.textMuted || '#64748b', fontSize: 16, fontWeight: 'bold' }}>✕</Text>
+          <View style={[styles.topBar, { borderBottomColor: theme.cardBorder }]}>
+            <TouchableOpacity onPress={onClose}>
+              <Text style={[styles.cancelBtnText, { color: theme.textSecondary }]}>Cancel</Text>
+            </TouchableOpacity>
+
+            <Text style={[styles.modalTitle, { color: theme.text }]}>EDIT PRODUCTION ROOM</Text>
+
+            <TouchableOpacity onPress={handleSaveRoom} disabled={isSaving || !canEdit}>
+              {isSaving ? (
+                <ActivityIndicator size="small" color={theme.primary} />
+              ) : (
+                <Text style={[styles.saveBtnText, { color: canEdit ? theme.primary : theme.textMuted }]}>
+                  Save
+                </Text>
+              )}
             </TouchableOpacity>
           </View>
 
-          {!canEdit && (
-            <View style={styles.warningBanner}>
-              <Text style={styles.warningText}>
-                ⚠️ You have {userAccess} access. Only Room Owners or Managers can modify production metadata.
-              </Text>
-            </View>
-          )}
-
-          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
+          <ScrollView contentContainerStyle={styles.scrollBody} keyboardShouldPersistTaps="handled">
             {/* 1. Title */}
-            <Text style={[styles.label, { color: theme?.textSecondary || '#9ca3af' }]}>PROJECT TITLE *</Text>
-            <TextInput
-              style={[styles.input, { backgroundColor: theme?.background || '#0c0d0e', borderColor: theme?.cardBorder || '#242830', color: theme?.text || '#ffffff' }]}
-              value={title}
-              onChangeText={setTitle}
-              placeholder="e.g. Midnight in Berlin"
-              placeholderTextColor="#555"
-              editable={canEdit}
-            />
-
-            {/* 2. Project Type Selector */}
-            <Text style={[styles.label, { color: theme?.textSecondary || '#9ca3af', marginTop: 14 }]}>PROJECT TYPE</Text>
-            <View style={styles.chipRow}>
-              {PROJECT_TYPES.map((pt) => {
-                const isSelected = projectType === pt;
-                return (
-                  <TouchableOpacity
-                    key={pt}
-                    style={[
-                      styles.chip,
-                      {
-                        backgroundColor: isSelected ? theme?.primary || '#f5a623' : theme?.background || '#0c0d0e',
-                        borderColor: isSelected ? theme?.primary || '#f5a623' : theme?.cardBorder || '#242830',
-                      },
-                    ]}
-                    onPress={() => canEdit && setProjectType(pt)}
-                    disabled={!canEdit}
-                  >
-                    <Text
-                      style={[
-                        styles.chipText,
-                        { color: isSelected ? '#000000' : theme?.textSecondary || '#9ca3af' },
-                      ]}
-                    >
-                      {pt}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
+            <View style={styles.fieldGroup}>
+              <Text style={[styles.label, { color: theme.textSecondary }]}>PROJECT TITLE *</Text>
+              <TextInput
+                style={[styles.input, { backgroundColor: theme.surface, color: theme.text, borderColor: theme.cardBorder }]}
+                value={title}
+                onChangeText={setTitle}
+                editable={canEdit}
+              />
             </View>
 
-            {/* 3. Logline */}
-            <Text style={[styles.label, { color: theme?.textSecondary || '#9ca3af', marginTop: 14 }]}>LOGLINE</Text>
-            <TextInput
-              style={[styles.textArea, { backgroundColor: theme?.background || '#0c0d0e', borderColor: theme?.cardBorder || '#242830', color: theme?.text || '#ffffff' }]}
-              value={logline}
-              onChangeText={setLogline}
-              placeholder="A one or two sentence summary of the project hook..."
-              placeholderTextColor="#555"
-              multiline
-              numberOfLines={3}
-              editable={canEdit}
-            />
+            {/* 2. Format */}
+            <View style={styles.fieldGroup}>
+              <Text style={[styles.label, { color: theme.textSecondary }]}>FORMAT</Text>
+              <View style={styles.chipRow}>
+                {PROJECT_TYPES.map((pt) => {
+                  const isSelected = projectType === pt;
+                  return (
+                    <TouchableOpacity
+                      key={pt}
+                      style={[
+                        styles.chip,
+                        {
+                          backgroundColor: isSelected ? theme.primary : theme.surface,
+                          borderColor: isSelected ? theme.primary : theme.cardBorder,
+                        },
+                      ]}
+                      onPress={() => canEdit && setProjectType(pt)}
+                      disabled={!canEdit}
+                    >
+                      <Text style={{ color: isSelected ? '#000000' : theme.textSecondary, fontSize: 12, fontWeight: '700' }}>
+                        {pt}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </View>
 
-            {/* 4. Story Treatment / Synopsis */}
-            <Text style={[styles.label, { color: theme?.textSecondary || '#9ca3af', marginTop: 14 }]}>STORY SYNOPSIS / TREATMENT</Text>
-            <TextInput
-              style={[styles.textArea, { height: 90, backgroundColor: theme?.background || '#0c0d0e', borderColor: theme?.cardBorder || '#242830', color: theme?.text || '#ffffff' }]}
-              value={synopsis}
-              onChangeText={setSynopsis}
-              placeholder="Detailed synopsis or production overview..."
-              placeholderTextColor="#555"
-              multiline
-              numberOfLines={4}
-              editable={canEdit}
-            />
+            {/* 3. Visibility (Section 10) */}
+            <View style={styles.fieldGroup}>
+              <Text style={[styles.label, { color: theme.primary }]}>ROOM VISIBILITY</Text>
+              <View style={styles.visCol}>
+                {ROOM_VISIBILITY_OPTIONS.map((opt) => {
+                  const isSel = visibility === opt.key;
+                  return (
+                    <TouchableOpacity
+                      key={opt.key}
+                      style={[
+                        styles.visItem,
+                        {
+                          backgroundColor: isSel ? '#242016' : theme.surface,
+                          borderColor: isSel ? theme.primary : theme.cardBorder,
+                        },
+                      ]}
+                      onPress={() => canEdit && setVisibility(opt.key)}
+                      disabled={!canEdit}
+                    >
+                      <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                        <Text style={{ color: isSel ? theme.primary : theme.text, fontWeight: '800', fontSize: 13 }}>
+                          {opt.label}
+                        </Text>
+                        {isSel && <Text style={{ color: theme.primary, fontWeight: '800', fontSize: 11 }}>Active</Text>}
+                      </View>
+                      <Text style={{ color: theme.textSecondary, fontSize: 11, marginTop: 2 }}>{opt.desc}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </View>
 
-            {/* 5. Shoot Dates via CinemaDatePicker */}
-            <View style={{ marginTop: 14 }}>
+            {/* 4. Dates & Location */}
+            <View style={styles.fieldGroup}>
+              <Text style={[styles.label, { color: theme.textSecondary }]}>PRODUCTION DATES</Text>
               <DateRangePickerField
-                fromLabel="SHOOT START DATE"
-                toLabel="SHOOT WRAP DATE"
+                fromLabel="Start Date"
+                toLabel="Wrap Date"
                 fromDate={shootStartDate}
                 toDate={shootEndDate}
                 onFromDateChange={setShootStartDate}
@@ -268,207 +353,265 @@ export default function EditRoomModal({ visible, roomId, roomData, onClose, onUp
               />
             </View>
 
-            {/* 6. Location */}
-            <Text style={[styles.label, { color: theme?.textSecondary || '#9ca3af', marginTop: 14 }]}>PRIMARY PRODUCTION LOCATION</Text>
-            <TextInput
-              style={[styles.input, { backgroundColor: theme?.background || '#0c0d0e', borderColor: theme?.cardBorder || '#242830', color: theme?.text || '#ffffff' }]}
-              value={location}
-              onChangeText={setLocation}
-              placeholder="e.g. Vancouver, BC / Stages 3 & 4"
-              placeholderTextColor="#555"
-              editable={canEdit}
-            />
-
-            {/* 7. Budget Tier */}
-            <Text style={[styles.label, { color: theme?.textSecondary || '#9ca3af', marginTop: 14 }]}>BUDGET TIER</Text>
-            <View style={styles.chipRow}>
-              {BUDGET_TIERS.map((bt) => {
-                const isSelected = budgetTier === bt;
-                return (
-                  <TouchableOpacity
-                    key={bt}
-                    style={[
-                      styles.chip,
-                      {
-                        backgroundColor: isSelected ? theme?.primary || '#f5a623' : theme?.background || '#0c0d0e',
-                        borderColor: isSelected ? theme?.primary || '#f5a623' : theme?.cardBorder || '#242830',
-                      },
-                    ]}
-                    onPress={() => canEdit && setBudgetTier(bt)}
-                    disabled={!canEdit}
-                  >
-                    <Text
-                      style={[
-                        styles.chipText,
-                        { color: isSelected ? '#000000' : theme?.textSecondary || '#9ca3af' },
-                      ]}
-                    >
-                      {bt}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
+            <View style={styles.fieldGroup}>
+              <Text style={[styles.label, { color: theme.textSecondary }]}>LOCATION</Text>
+              <TextInput
+                style={[styles.input, { backgroundColor: theme.surface, color: theme.text, borderColor: theme.cardBorder }]}
+                value={location}
+                onChangeText={setLocation}
+                placeholder="e.g. Goa, India"
+                placeholderTextColor={theme.textMuted}
+                editable={canEdit}
+              />
             </View>
 
-            {/* 8. Poster / Artwork */}
-            <Text style={[styles.label, { color: theme?.textSecondary || '#9ca3af', marginTop: 14 }]}>PROJECT POSTER</Text>
-            <View style={[styles.posterRow, { backgroundColor: theme?.background || '#0c0d0e', borderColor: theme?.cardBorder || '#242830' }]}>
-              {posterUri || posterUrl ? (
-                <Image source={{ uri: posterUri || posterUrl }} style={styles.posterPreview} />
-              ) : (
-                <View style={styles.posterPlaceholder}>
-                  <Text style={{ fontSize: 28 }}>🎬</Text>
-                  <Text style={[styles.placeholderText, { color: theme?.textMuted || '#64748b' }]}>No Poster</Text>
+            {/* 5. Logline & Synopsis */}
+            <View style={styles.fieldGroup}>
+              <Text style={[styles.label, { color: theme.textSecondary }]}>LOGLINE</Text>
+              <TextInput
+                style={[styles.textArea, { backgroundColor: theme.surface, color: theme.text, borderColor: theme.cardBorder }]}
+                value={logline}
+                onChangeText={setLogline}
+                placeholder="Summary hook..."
+                placeholderTextColor={theme.textMuted}
+                multiline
+                numberOfLines={3}
+                editable={canEdit}
+              />
+            </View>
+
+            {/* 6. Crew Requirements (Section 12) */}
+            <View style={styles.fieldGroup}>
+              <Text style={[styles.label, { color: theme.primary }]}>CREW REQUIREMENTS</Text>
+              {crewRequirements.map((req) => (
+                <View
+                  key={req.id}
+                  style={[styles.reqRow, { backgroundColor: theme.surface, borderColor: theme.cardBorder }]}
+                >
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ color: theme.primary, fontSize: 10, fontWeight: '800' }}>
+                      {req.department.toUpperCase()}
+                    </Text>
+                    <Text style={{ color: theme.text, fontSize: 13, fontWeight: '700' }}>
+                      {req.role} — <Text style={{ color: theme.primary }}>{req.quantity} needed</Text>
+                    </Text>
+                  </View>
+                  {canEdit && (
+                    <TouchableOpacity onPress={() => handleRemoveRequirement(req.id)} style={{ padding: 6 }}>
+                      <Text style={{ color: '#f87171', fontSize: 14 }}>✕</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+              ))}
+
+              {canEdit && (
+                <View style={[styles.addReqBox, { backgroundColor: theme.surface, borderColor: theme.cardBorder }]}>
+                  <Text style={{ color: theme.primary, fontSize: 11, fontWeight: '800', marginBottom: 8 }}>
+                    + ADD REQUIREMENT
+                  </Text>
+                  <View style={{ flexDirection: 'row', gap: 8, marginBottom: 8 }}>
+                    <TextInput
+                      style={[styles.inputSm, { flex: 2, backgroundColor: theme.card, color: theme.text, borderColor: theme.cardBorder }]}
+                      placeholder="Craft title (e.g. Gaffer)"
+                      placeholderTextColor={theme.textMuted}
+                      value={newRoleTitle}
+                      onChangeText={setNewRoleTitle}
+                    />
+                    <TextInput
+                      style={[styles.inputSm, { flex: 1, backgroundColor: theme.card, color: theme.text, borderColor: theme.cardBorder, textAlign: 'center' }]}
+                      placeholder="Qty"
+                      placeholderTextColor={theme.textMuted}
+                      value={newRoleQty.toString()}
+                      onChangeText={(t) => setNewRoleQty(Math.max(1, parseInt(t, 10) || 1))}
+                      keyboardType="number-pad"
+                    />
+                  </View>
+                  <TouchableOpacity
+                    style={[styles.addReqBtn, { backgroundColor: theme.primary }]}
+                    onPress={handleAddRequirement}
+                  >
+                    <Text style={{ color: '#000', fontWeight: '800', fontSize: 12 }}>Add Role</Text>
+                  </TouchableOpacity>
                 </View>
               )}
+            </View>
 
-              <View style={{ flex: 1, marginLeft: 14, justifyContent: 'center' }}>
-                <TouchableOpacity
-                  style={[styles.uploadPosterBtn, { borderColor: theme?.primary || '#f5a623' }]}
-                  onPress={handlePickPoster}
-                  disabled={!canEdit || isUploadingPoster}
-                >
-                  {isUploadingPoster ? (
-                    <ActivityIndicator size="small" color={theme?.primary || '#f5a623'} />
-                  ) : (
-                    <Text style={[styles.uploadPosterText, { color: theme?.primary || '#f5a623' }]}>
-                      {posterUrl ? 'Change Poster' : 'Upload Poster'}
-                    </Text>
-                  )}
-                </TouchableOpacity>
-
-                {posterUrl && canEdit && (
+            {/* 7. Poster */}
+            <View style={styles.fieldGroup}>
+              <Text style={[styles.label, { color: theme.textSecondary }]}>PROJECT POSTER</Text>
+              <View style={styles.posterRow}>
+                {posterUri || posterUrl ? (
+                  <Image source={{ uri: posterUri || posterUrl }} style={styles.posterImg} />
+                ) : (
+                  <View style={[styles.posterPlaceholder, { backgroundColor: theme.surface }]}>
+                    <Text style={{ fontSize: 24 }}>🎬</Text>
+                  </View>
+                )}
+                {canEdit && (
                   <TouchableOpacity
-                    style={{ marginTop: 8 }}
-                    onPress={() => {
-                      setPosterUrl(null);
-                      setPosterMetadata(null);
-                      setPosterUri(null);
-                    }}
+                    style={[styles.posterBtn, { borderColor: theme.primary }]}
+                    onPress={handlePickPoster}
+                    disabled={isUploadingPoster}
                   >
-                    <Text style={{ color: '#f87171', fontSize: 12 }}>Remove Poster</Text>
+                    <Text style={{ color: theme.primary, fontSize: 12, fontWeight: '700' }}>
+                      {isUploadingPoster ? 'Uploading...' : 'Change Poster 📷'}
+                    </Text>
                   </TouchableOpacity>
                 )}
               </View>
             </View>
 
-            {/* Save Button */}
-            <TouchableOpacity
-              style={[
-                styles.saveBtn,
-                {
-                  backgroundColor: canEdit ? theme?.primary || '#f5a623' : '#333333',
-                },
-              ]}
-              onPress={handleSaveRoom}
-              disabled={!canEdit || isSaving}
-              activeOpacity={0.8}
-            >
-              {isSaving ? (
-                <ActivityIndicator color="#000000" size="small" />
-              ) : (
-                <Text style={styles.saveBtnText}>Save Room Changes</Text>
-              )}
-            </TouchableOpacity>
+            {/* 8. Danger Zone: Archive / Delete */}
+            {canEdit && (
+              <View style={[styles.dangerZone, { backgroundColor: theme.surface, borderColor: theme.cardBorder }]}>
+                <Text style={{ color: theme.textSecondary, fontSize: 11, fontWeight: '800', marginBottom: 10 }}>
+                  PRODUCTION LIFECYCLE
+                </Text>
+
+                <TouchableOpacity
+                  style={[styles.actionRowBtn, { borderColor: theme.cardBorder }]}
+                  onPress={handleToggleArchive}
+                >
+                  <Text style={{ color: theme.text, fontWeight: '700', fontSize: 13 }}>
+                    {roomStatus === 'ARCHIVED' ? 'Restore Active Status' : 'Archive Production Room'}
+                  </Text>
+                </TouchableOpacity>
+
+                {roomData?.creatorId === currentUser?.uid && (
+                  <TouchableOpacity
+                    style={[styles.actionRowBtn, { borderColor: '#b91c1c', marginTop: 10 }]}
+                    onPress={handleDeleteRoom}
+                  >
+                    <Text style={{ color: '#f87171', fontWeight: '800', fontSize: 13 }}>
+                      DELETE PRODUCTION ROOM PERMANENTLY
+                    </Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            )}
           </ScrollView>
-        </View>
-      </View>
+        </Pressable>
+      </Pressable>
     </Modal>
   );
 }
 
 const styles = StyleSheet.create({
-  overlay: {
+  backdrop: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.85)',
+    backgroundColor: 'rgba(0, 0, 0, 0.8)',
     justifyContent: 'flex-end',
   },
-  modalCard: {
+  card: {
+    width: '100%',
+    maxHeight: '92%',
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     borderWidth: 1,
-    maxHeight: '90%',
-    padding: 18,
+    overflow: 'hidden',
   },
-  topRow: {
+  topBar: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 12,
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    borderBottomWidth: 1,
   },
-  title: {
-    fontSize: 15,
-    fontWeight: '800',
+  cancelBtnText: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  modalTitle: {
+    fontSize: 13,
+    fontWeight: '900',
     letterSpacing: 1,
   },
-  subtitle: {
-    fontSize: 12,
-    marginTop: 2,
+  saveBtnText: {
+    fontSize: 15,
+    fontWeight: '800',
   },
-  closeBtn: {
-    padding: 6,
+  scrollBody: {
+    padding: 16,
+    paddingBottom: 40,
   },
-  warningBanner: {
-    backgroundColor: '#2a2215',
-    borderColor: '#f5a623',
-    borderWidth: 1,
-    borderRadius: 8,
-    padding: 10,
-    marginBottom: 12,
-  },
-  warningText: {
-    color: '#f5a623',
-    fontSize: 12,
-    lineHeight: 16,
-  },
-  scrollContent: {
-    paddingBottom: 30,
+  fieldGroup: {
+    marginBottom: 16,
   },
   label: {
     fontSize: 11,
-    fontWeight: '700',
-    letterSpacing: 0.8,
+    fontWeight: '800',
+    letterSpacing: 1,
     marginBottom: 6,
   },
   input: {
+    height: 46,
     borderRadius: 8,
     borderWidth: 1,
     paddingHorizontal: 12,
-    paddingVertical: 10,
     fontSize: 14,
   },
   textArea: {
+    height: 70,
     borderRadius: 8,
     borderWidth: 1,
     paddingHorizontal: 12,
-    paddingVertical: 10,
+    paddingTop: 8,
     fontSize: 14,
-    height: 70,
     textAlignVertical: 'top',
   },
   chipRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 8,
+    gap: 6,
   },
   chip: {
     paddingHorizontal: 12,
-    paddingVertical: 6,
+    paddingVertical: 7,
     borderRadius: 6,
     borderWidth: 1,
   },
-  chipText: {
-    fontSize: 12,
-    fontWeight: '600',
+  visCol: {
+    gap: 8,
+  },
+  visItem: {
+    padding: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+  },
+  reqRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    marginBottom: 6,
+  },
+  addReqBox: {
+    padding: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    marginTop: 8,
+  },
+  inputSm: {
+    height: 40,
+    borderRadius: 6,
+    borderWidth: 1,
+    paddingHorizontal: 10,
+    fontSize: 13,
+  },
+  addReqBtn: {
+    height: 36,
+    borderRadius: 6,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   posterRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    padding: 12,
-    borderRadius: 8,
-    borderWidth: 1,
+    gap: 12,
   },
-  posterPreview: {
+  posterImg: {
     width: 60,
     height: 90,
     borderRadius: 6,
@@ -477,35 +620,25 @@ const styles = StyleSheet.create({
     width: 60,
     height: 90,
     borderRadius: 6,
-    backgroundColor: '#121417',
     justifyContent: 'center',
     alignItems: 'center',
   },
-  placeholderText: {
-    fontSize: 9,
-    marginTop: 4,
-  },
-  uploadPosterBtn: {
-    borderWidth: 1,
-    borderRadius: 6,
-    paddingVertical: 8,
+  posterBtn: {
     paddingHorizontal: 14,
-    alignItems: 'center',
+    paddingVertical: 10,
+    borderRadius: 6,
+    borderWidth: 1,
   },
-  uploadPosterText: {
-    fontSize: 13,
-    fontWeight: '700',
+  dangerZone: {
+    padding: 14,
+    borderRadius: 10,
+    borderWidth: 1,
+    marginTop: 10,
   },
-  saveBtn: {
-    marginTop: 22,
+  actionRowBtn: {
+    paddingVertical: 12,
     borderRadius: 8,
-    paddingVertical: 14,
+    borderWidth: 1,
     alignItems: 'center',
-  },
-  saveBtnText: {
-    color: '#000000',
-    fontWeight: '800',
-    fontSize: 14,
-    letterSpacing: 0.5,
   },
 });

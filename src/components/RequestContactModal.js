@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -14,6 +14,7 @@ import {
 import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
 import { submitContactRequest, REQUEST_TYPES } from '../services/contactRequestService';
+import { ACTOR_ROLE_POSITIONS } from './PostProductionCallModal';
 
 const PRODUCTION_TYPES = [
   'Feature Film',
@@ -23,19 +24,48 @@ const PRODUCTION_TYPES = [
   'Indie / Doc',
 ];
 import { DateRangePickerField } from './CinemaDatePicker';
+import { useToast } from '../context/ToastContext';
 
 export default function RequestContactModal({ visible, targetTalent, onClose, onSuccess }) {
   const { theme } = useTheme();
   const { currentUser, userProfile } = useAuth();
+  const { showToast } = useToast();
 
+  const [inquiryCategory, setInquiryCategory] = useState('CREW'); // 'CREW' | 'CASTING'
   const [projectName, setProjectName] = useState('');
   const [productionType, setProductionType] = useState('Feature Film');
   const [roleName, setRoleName] = useState('');
+  const [characterName, setCharacterName] = useState('');
+  const [rolePosition, setRolePosition] = useState('Main Actor / Lead');
+  const [characterDescription, setCharacterDescription] = useState('');
+  const [draftScriptUrl, setDraftScriptUrl] = useState('');
   const [shootStartDate, setShootStartDate] = useState('');
   const [shootEndDate, setShootEndDate] = useState('');
   const [materialLink, setMaterialLink] = useState('');
   const [message, setMessage] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (visible && targetTalent) {
+      const isActor =
+        targetTalent?.category === 'ACTOR' ||
+        targetTalent?.role?.toLowerCase()?.includes('actor') ||
+        targetTalent?.roles?.some?.((r) => r?.toLowerCase()?.includes('actor'));
+      setInquiryCategory(isActor ? 'CASTING' : 'CREW');
+      setProjectName('');
+      setProductionType('Feature Film');
+      setRoleName('');
+      setCharacterName('');
+      setRolePosition('Main Actor / Lead');
+      setCharacterDescription('');
+      setDraftScriptUrl('');
+      setShootStartDate('');
+      setShootEndDate('');
+      setMaterialLink('');
+      setMessage('');
+      setIsSubmitting(false);
+    }
+  }, [visible, targetTalent]);
 
   if (!targetTalent) return null;
 
@@ -48,8 +78,14 @@ export default function RequestContactModal({ visible, targetTalent, onClose, on
       Alert.alert('Required Field', 'Please provide a project name.');
       return;
     }
-    if (!roleName.trim()) {
-      Alert.alert('Required Field', 'Please specify the role or position.');
+
+    const isCasting = inquiryCategory === 'CASTING';
+    const activeRole = isCasting
+      ? (characterName.trim() ? `${characterName.trim()} (${rolePosition})` : roleName.trim())
+      : roleName.trim();
+
+    if (!activeRole) {
+      Alert.alert('Required Field', isCasting ? 'Please specify the character / role name.' : 'Please specify the role or position.');
       return;
     }
     if (!message.trim()) {
@@ -81,23 +117,25 @@ export default function RequestContactModal({ visible, targetTalent, onClose, on
         details: {
           projectName: projectName.trim(),
           productionType,
-          roleName: roleName.trim(),
-          materialLink: materialLink.trim(),
+          roleName: activeRole,
+          materialLink: materialLink.trim() || null,
           shootDates: shootStartDate && shootEndDate ? `${shootStartDate} – ${shootEndDate}` : (shootStartDate || null),
           message: message.trim(),
+          isActorCall: isCasting,
+          rolePosition: isCasting ? rolePosition : null,
+          characterName: isCasting ? (characterName.trim() || null) : null,
+          characterDescription: isCasting ? (characterDescription.trim() || null) : null,
+          scriptUrl: isCasting && draftScriptUrl.trim() ? draftScriptUrl.trim() : null,
+          scriptShared: false,
+          scriptSharePending: false,
         },
       });
 
-      Alert.alert(
-        'Contact Request Dispatched',
-        isRepresented
-          ? `Your inquiry has been routed to official representation (${repName || 'Agency'}). You will be notified once reviewed.`
-          : `Your contact request has been routed to ${targetTalent.name}. You will be notified once reviewed.`,
-        [{ text: 'Done', onPress: () => onSuccess && onSuccess() }]
-      );
+      showToast({ type: 'success', message: 'Contact request sent' });
+      if (onSuccess) onSuccess();
       onClose();
     } catch (err) {
-      Alert.alert('Submission Error', err.message);
+      showToast({ type: 'error', message: err.message || "Couldn't send request" });
     } finally {
       setIsSubmitting(false);
     }
@@ -151,8 +189,52 @@ export default function RequestContactModal({ visible, targetTalent, onClose, on
               </Text>
             </View>
 
+            {/* Inquiry Scope Toggle: Crew/Craft vs Casting/Actor */}
+            <Text style={[styles.label, { color: theme.textSecondary }]}>INQUIRY TYPE</Text>
+            <View style={styles.chipsRow}>
+              <TouchableOpacity
+                style={[
+                  styles.chip,
+                  {
+                    backgroundColor: inquiryCategory === 'CREW' ? theme.primary : theme.surface,
+                    borderColor: inquiryCategory === 'CREW' ? theme.primary : theme.cardBorder,
+                  },
+                ]}
+                onPress={() => setInquiryCategory('CREW')}
+              >
+                <Text
+                  style={[
+                    styles.chipText,
+                    { color: inquiryCategory === 'CREW' ? '#000000' : theme.text, fontWeight: '800' },
+                  ]}
+                >
+                  🎥 Crew & Department Position
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[
+                  styles.chip,
+                  {
+                    backgroundColor: inquiryCategory === 'CASTING' ? '#8b5cf6' : theme.surface,
+                    borderColor: inquiryCategory === 'CASTING' ? '#8b5cf6' : theme.cardBorder,
+                  },
+                ]}
+                onPress={() => setInquiryCategory('CASTING')}
+              >
+                <Text
+                  style={[
+                    styles.chipText,
+                    { color: inquiryCategory === 'CASTING' ? '#ffffff' : theme.text, fontWeight: '800' },
+                  ]}
+                >
+                  🎭 Casting / Actor Call
+                </Text>
+              </TouchableOpacity>
+            </View>
+
             {/* Project Title */}
-            <Text style={[styles.label, { color: theme.textSecondary }]}>PROJECT TITLE *</Text>
+            <Text style={[styles.label, { color: theme.textSecondary, marginTop: 12 }]}>PROJECT TITLE *</Text>
             <TextInput
               style={[
                 styles.input,
@@ -196,20 +278,126 @@ export default function RequestContactModal({ visible, targetTalent, onClose, on
               })}
             </View>
 
-            {/* Role / Position */}
-            <Text style={[styles.label, { color: theme.textSecondary, marginTop: 12 }]}>
-              ROLE / CRAFT NEEDED *
-            </Text>
-            <TextInput
-              style={[
-                styles.input,
-                { backgroundColor: theme.surface, color: theme.text, borderColor: theme.cardBorder },
-              ]}
-              placeholder="e.g. Lead Actor (Det. Miller), Cinematographer (A-Cam)"
-              placeholderTextColor={theme.textMuted}
-              value={roleName}
-              onChangeText={setRoleName}
-            />
+            {/* Role / Character Name & Position */}
+            {inquiryCategory === 'CASTING' ? (
+              <>
+                <Text style={[styles.label, { color: theme.textSecondary, marginTop: 12 }]}>
+                  CHARACTER / ROLE NAME *
+                </Text>
+                <TextInput
+                  style={[
+                    styles.input,
+                    { backgroundColor: theme.surface, color: theme.text, borderColor: theme.cardBorder },
+                  ]}
+                  placeholder="e.g. Detective Marcus Vance"
+                  placeholderTextColor={theme.textMuted}
+                  value={characterName}
+                  onChangeText={setCharacterName}
+                />
+
+                <Text style={[styles.label, { color: theme.textSecondary, marginTop: 12 }]}>
+                  ROLE POSITION
+                </Text>
+                <View style={styles.chipsRow}>
+                  {ACTOR_ROLE_POSITIONS.map((pos) => {
+                    const isSelected = rolePosition === pos;
+                    return (
+                      <TouchableOpacity
+                        key={pos}
+                        style={[
+                          styles.chip,
+                          {
+                            backgroundColor: isSelected ? theme.primary : theme.surface,
+                            borderColor: isSelected ? theme.primary : theme.cardBorder,
+                          },
+                        ]}
+                        onPress={() => setRolePosition(pos)}
+                      >
+                        <Text
+                          style={[
+                            styles.chipText,
+                            { color: isSelected ? '#000000' : theme.text, fontWeight: isSelected ? '800' : '600' },
+                          ]}
+                        >
+                          {pos}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+
+                <Text style={[styles.label, { color: theme.textSecondary, marginTop: 12 }]}>
+                  CHARACTER BREAKDOWN & TRAITS
+                </Text>
+                <TextInput
+                  style={[
+                    styles.input,
+                    {
+                      backgroundColor: theme.surface,
+                      color: theme.text,
+                      borderColor: theme.cardBorder,
+                      height: 70,
+                      textAlignVertical: 'top',
+                    },
+                  ]}
+                  placeholder="Describe character motivations, demeanor, accent, or background..."
+                  placeholderTextColor={theme.textMuted}
+                  value={characterDescription}
+                  onChangeText={setCharacterDescription}
+                  multiline
+                  numberOfLines={3}
+                />
+
+                <Text style={[styles.label, { color: theme.textSecondary, marginTop: 12 }]}>
+                  DRAFT SCRIPT / SIDES LINK (PROTECTED)
+                </Text>
+                <TextInput
+                  style={[
+                    styles.input,
+                    { backgroundColor: theme.surface, color: theme.text, borderColor: theme.cardBorder },
+                  ]}
+                  placeholder="e.g. https://drive.google.com/sides.pdf"
+                  placeholderTextColor={theme.textMuted}
+                  value={draftScriptUrl}
+                  onChangeText={setDraftScriptUrl}
+                  autoCapitalize="none"
+                />
+                <View
+                  style={[
+                    styles.repNoticeBox,
+                    {
+                      backgroundColor: '#1f1b13',
+                      borderColor: '#d97706',
+                      marginTop: 8,
+                      marginBottom: 4,
+                    },
+                  ]}
+                >
+                  <Text style={{ fontSize: 10, color: '#f59e0b', fontWeight: '900', letterSpacing: 0.5 }}>
+                    🔒 SCRIPT PRIVACY SAFEGUARD
+                  </Text>
+                  <Text style={{ fontSize: 11, color: theme.textMuted, marginTop: 2, lineHeight: 15 }}>
+                    The draft script will remain locked until the actor accepts the role. Once the actor confirms acceptance, you will be prompted to share the draft script with them.
+                  </Text>
+                </View>
+              </>
+            ) : (
+              <>
+                <Text style={[styles.label, { color: theme.textSecondary, marginTop: 12 }]}>
+                  ROLE / CRAFT NEEDED *
+                </Text>
+                <TextInput
+                  style={[
+                    styles.input,
+                    { backgroundColor: theme.surface, color: theme.text, borderColor: theme.cardBorder },
+                  ]}
+                  placeholder="e.g. Lead Actor (Det. Miller), Cinematographer (A-Cam)"
+                  placeholderTextColor={theme.textMuted}
+                  value={roleName}
+                  onChangeText={setRoleName}
+                />
+              </>
+            )}
 
             {/* Projected Shoot Dates Range */}
             <DateRangePickerField

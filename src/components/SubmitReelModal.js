@@ -15,6 +15,7 @@ import {
 import * as ImagePicker from 'expo-image-picker';
 import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
+import { useToast } from '../context/ToastContext';
 import { submitContactRequest, REQUEST_TYPES } from '../services/contactRequestService';
 import { uploadToCloudinary } from '../services/cloudinaryService';
 
@@ -23,11 +24,13 @@ export default function SubmitReelModal({
   targetLead,
   initialProject = '',
   initialRole = '',
+  callData = null,
   onClose,
   onSuccess,
 }) {
   const { theme } = useTheme();
   const { currentUser, userProfile } = useAuth();
+  const { showToast } = useToast();
 
   const [inputMode, setInputMode] = useState('LINK'); // 'LINK' | 'UPLOAD'
   const [reelUrl, setReelUrl] = useState('');
@@ -44,15 +47,15 @@ export default function SubmitReelModal({
   useEffect(() => {
     if (visible) {
       setReelUrl(userProfile?.showreelUrl || '');
-      setRoleOrDepartment(initialRole || userProfile?.role || userProfile?.roles?.[0] || '');
-      setProjectInterest(initialProject || '');
+      setRoleOrDepartment(initialRole || callData?.characterName || userProfile?.role || userProfile?.roles?.[0] || '');
+      setProjectInterest(initialProject || callData?.title || '');
       setMessage('');
       setUploadedVideo(null);
       setIsUploading(false);
       setUploadProgress(0);
       setIsSubmitting(false);
     }
-  }, [visible, initialProject, initialRole, userProfile]);
+  }, [visible, initialProject, initialRole, callData, userProfile]);
 
   if (!targetLead) return null;
 
@@ -64,7 +67,7 @@ export default function SubmitReelModal({
     try {
       const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (!perm.granted) {
-        Alert.alert('Permission Required', 'Camera roll access is needed to select a video.');
+        showToast({ type: 'warning', message: 'Camera roll access is needed to select a video.' });
         return;
       }
 
@@ -90,10 +93,10 @@ export default function SubmitReelModal({
 
         setUploadedVideo(mediaRef);
         setReelUrl(mediaRef.secureUrl);
-        Alert.alert('✓ Video Uploaded', 'Your showreel has been securely processed and attached.');
+        showToast({ type: 'success', title: 'Video Uploaded', message: 'Your showreel has been attached.' });
       }
     } catch (err) {
-      Alert.alert('Upload Notice', err.message || 'Could not upload video.');
+      showToast({ type: 'error', message: err.message || 'Could not upload video.' });
     } finally {
       setIsUploading(false);
     }
@@ -102,26 +105,26 @@ export default function SubmitReelModal({
   // Preview the active reel link in browser/player
   const handlePreviewReel = () => {
     if (!activeReel) {
-      Alert.alert('No Reel Provided', 'Please paste a link or upload a video clip first.');
+      showToast({ type: 'warning', message: 'Please paste a link or upload a video clip first.' });
       return;
     }
     Linking.openURL(activeReel).catch(() => {
-      Alert.alert('Preview Error', 'Unable to open reel URL. Please verify the link format (e.g. https://...).');
+      showToast({ type: 'error', message: 'Unable to open reel URL. Please verify the link format.' });
     });
   };
 
   // Handle final submission
   const handleSubmit = async () => {
     if (!currentUser?.uid) {
-      Alert.alert('Sign In Required', 'Please sign in to submit your showreel.');
+      showToast({ type: 'warning', message: 'Please sign in to submit your showreel.' });
       return;
     }
     if (!activeReel) {
-      Alert.alert('Showreel Required', 'Please paste a showreel link or upload a video clip.');
+      showToast({ type: 'warning', message: 'Please paste a showreel link or upload a video clip.' });
       return;
     }
     if (!roleOrDepartment.trim()) {
-      Alert.alert('Craft Required', 'Please specify your craft or role for consideration (e.g. Cinematographer, Actor).');
+      showToast({ type: 'warning', message: 'Please specify your craft or role for consideration.' });
       return;
     }
 
@@ -129,7 +132,7 @@ export default function SubmitReelModal({
     try {
       const recipientId = targetLead.uid || targetLead.id;
       if (recipientId === currentUser.uid) {
-        Alert.alert('Notice', 'You cannot submit a reel to yourself.');
+        showToast({ type: 'info', message: 'You cannot submit a reel to yourself.' });
         setIsSubmitting(false);
         return;
       }
@@ -158,25 +161,29 @@ export default function SubmitReelModal({
           roleOrDepartment: roleOrDepartment.trim(),
           projectInterest: projectInterest.trim() || null,
           message: message.trim(),
+          // Actor / Casting Call specifics
+          isActorCall: callData?.postType === 'CASTING_CALL' || !!callData?.characterName,
+          characterName: callData?.characterName || null,
+          characterDescription: callData?.characterDescription || null,
+          rolePosition: callData?.rolePosition || null,
+          genderPreference: callData?.genderPreference || null,
+          scriptUrl: callData?.draftScriptUrl || callData?.scriptSidesUrl || null,
+          scriptShared: false,
+          requiresScriptApproval: true,
         },
       });
 
-      Alert.alert(
-        '✓ Reel Submitted',
-        `Your showreel and craft credentials have been dispatched to ${targetLead.name || 'the production lead'}.\n\n` +
-        `You can track the review status in Requests -> Sent.`,
-        [
-          {
-            text: 'Understood',
-            onPress: () => {
-              if (onSuccess) onSuccess();
-              onClose();
-            },
-          },
-        ]
-      );
+      showToast({
+        type: 'success',
+        title: callData ? 'Application Dispatched' : 'Reel Submitted',
+        message: callData
+          ? `Your application for ${roleOrDepartment} has been dispatched to ${targetLead.name || 'the production lead'}.`
+          : `Your showreel has been dispatched to ${targetLead.name || 'the production lead'}.`,
+      });
+      if (onSuccess) onSuccess();
+      onClose();
     } catch (err) {
-      Alert.alert('Submission Error', err.message || 'Could not dispatch your reel.');
+      showToast({ type: 'error', title: 'Submission Error', message: err.message || 'Could not dispatch your reel.' });
     } finally {
       setIsSubmitting(false);
     }
@@ -192,9 +199,17 @@ export default function SubmitReelModal({
           {/* Top Header */}
           <View style={styles.topRow}>
             <View style={{ flex: 1 }}>
-              <Text style={[styles.title, { color: theme.text }]}>🎬 SUBMIT SHOWREEL</Text>
+              <Text style={[styles.title, { color: theme.text }]}>
+                {callData?.postType === 'CASTING_CALL'
+                  ? '🎭 AUDITION APPLICATION'
+                  : callData
+                  ? '🎬 CREW APPLICATION'
+                  : '🎬 SUBMIT SHOWREEL'}
+              </Text>
               <Text style={[styles.subTitle, { color: theme.textSecondary }]}>
-                Submit to {targetLead.name} ({targetLead.role || 'Production Lead'})
+                {callData
+                  ? `Applying for ${roleOrDepartment || 'Role'} · ${targetLead.name || 'Production Lead'}`
+                  : `Submit to ${targetLead.name} (${targetLead.role || 'Production Lead'})`}
               </Text>
             </View>
             <TouchableOpacity onPress={onClose} style={styles.closeBtn}>
@@ -206,10 +221,12 @@ export default function SubmitReelModal({
             {/* Context Notice */}
             <View style={[styles.noticeBox, { backgroundColor: '#14161a', borderColor: theme.cardBorder }]}>
               <Text style={[styles.noticeTitle, { color: theme.primary }]}>
-                PROFESSIONAL PORTFOLIO SUBMISSION
+                {callData?.postType === 'CASTING_CALL' ? '🎭 ACTOR AUDITION SUBMISSION' : 'PROFESSIONAL PORTFOLIO SUBMISSION'}
               </Text>
               <Text style={[styles.noticeSub, { color: theme.textMuted }]}>
-                Submitting your reel initiates a verified review request. Upon acceptance, private direct messaging and contact details are enabled.
+                {callData?.postType === 'CASTING_CALL'
+                  ? `Submitting for ${callData.characterName || 'Role'}${callData.rolePosition ? ` (${callData.rolePosition})` : ''}. If accepted by the director, the production's draft script sides will be automatically unlocked for your review.`
+                  : 'Submitting your reel initiates a verified review request. Upon acceptance, private direct messaging and contact details are enabled.'}
               </Text>
             </View>
 
@@ -365,7 +382,9 @@ export default function SubmitReelModal({
                 {isSubmitting ? (
                   <ActivityIndicator size="small" color="#000000" />
                 ) : (
-                  <Text style={styles.submitBtnText}>Submit Reel ➔</Text>
+                  <Text style={styles.submitBtnText}>
+                    {callData ? 'Submit Application ➔' : 'Submit Reel ➔'}
+                  </Text>
                 )}
               </TouchableOpacity>
             </View>

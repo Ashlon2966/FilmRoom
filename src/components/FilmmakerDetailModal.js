@@ -13,12 +13,18 @@ import {
 } from 'react-native';
 import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
+import { useToast } from '../context/ToastContext';
 import {
   getConnectionStatus,
   acceptConnectionRequest,
   removeConnection,
 } from '../services/connectionService';
 import { getPendingRequestBetweenUsers } from '../services/contactRequestService';
+import {
+  followFilmmaker,
+  unfollowFilmmaker,
+  streamFollowStatus,
+} from '../services/followService';
 import { AVAILABILITY_CONFIG, AVAILABILITY_STATUS, hasCapability } from '../config/rolesConfig';
 
 // Modals for the two contact flows and private shortlist
@@ -30,6 +36,7 @@ import SubmitReelModal from './SubmitReelModal';
 export default function FilmmakerDetailModal({ visible, filmmaker, onClose, onSendPitch }) {
   const { theme } = useTheme();
   const { currentUser, userProfile } = useAuth();
+  const { showToast } = useToast();
 
   const [activeTab, setActiveTab] = useState('Showreel');
   const [connectionState, setConnectionState] = useState({
@@ -42,15 +49,21 @@ export default function FilmmakerDetailModal({ visible, filmmaker, onClose, onSe
   const [pendingContactRequest, setPendingContactRequest] = useState(null);
   const [actionLoading, setActionLoading] = useState(false);
 
+  // Follow State (Requirements 29, 57, 91)
+  const [isFollowing, setIsFollowing] = useState(false);
+  const [isTogglingFollow, setIsTogglingFollow] = useState(false);
+
   // Modal display states
   const [isRequestContactModalOpen, setIsRequestContactModalOpen] = useState(false);
   const [isSubmitInterestModalOpen, setIsSubmitInterestModalOpen] = useState(false);
   const [isSubmitReelModalOpen, setIsSubmitReelModalOpen] = useState(false);
   const [isShortlistModalOpen, setIsShortlistModalOpen] = useState(false);
 
-  // Query connection and request state when modal opens
+  // Query connection, request, and follow state when modal opens
   useEffect(() => {
     let isMounted = true;
+    let unsubFollow = () => {};
+
     const fetchStatus = async () => {
       if (visible && currentUser?.uid && filmmaker?.id && currentUser.uid !== filmmaker.id) {
         const [conn, pendingReq] = await Promise.all([
@@ -61,14 +74,41 @@ export default function FilmmakerDetailModal({ visible, filmmaker, onClose, onSe
           setConnectionState(conn);
           setPendingContactRequest(pendingReq);
         }
+
+        unsubFollow = streamFollowStatus(currentUser.uid, filmmaker.id, (following) => {
+          if (isMounted) setIsFollowing(following);
+        });
       }
     };
 
     fetchStatus();
     return () => {
       isMounted = false;
+      unsubFollow();
     };
   }, [visible, currentUser?.uid, filmmaker?.id]);
+
+  const handleToggleFollow = async () => {
+    if (!currentUser?.uid || !filmmaker?.id) return;
+    setIsTogglingFollow(true);
+    try {
+      if (isFollowing) {
+        await unfollowFilmmaker(currentUser.uid, filmmaker.id);
+        showToast({ type: 'info', message: `Unfollowed @${filmmaker.username || 'filmmaker'}.` });
+      } else {
+        await followFilmmaker(currentUser, filmmaker);
+        showToast({
+          type: 'success',
+          title: 'Following for Updates',
+          message: `You will receive production announcements and calls from @${filmmaker.username || 'filmmaker'}.`,
+        });
+      }
+    } catch (err) {
+      showToast({ type: 'error', message: err.message || 'Follow action failed.' });
+    } finally {
+      setIsTogglingFollow(false);
+    }
+  };
 
   if (!filmmaker) return null;
 
@@ -217,27 +257,39 @@ export default function FilmmakerDetailModal({ visible, filmmaker, onClose, onSe
           <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40 }}>
             {/* Header / Avatar Block */}
             <View style={styles.profileHeader}>
-              {filmmaker.avatar ? (
-                <Image source={{ uri: filmmaker.avatar }} style={styles.avatar} />
+              {(filmmaker.photoURL || filmmaker.avatar) ? (
+                <Image source={{ uri: filmmaker.photoURL || filmmaker.avatar }} style={styles.avatar} />
               ) : (
                 <View style={[styles.avatarPlaceholder, { backgroundColor: theme.surface }]}>
                   <Text style={[styles.avatarInitial, { color: theme.primary }]}>
-                    {filmmaker.name ? filmmaker.name[0].toUpperCase() : 'F'}
+                    {(filmmaker.name || filmmaker.fullName) ? (filmmaker.name || filmmaker.fullName)[0].toUpperCase() : 'F'}
                   </Text>
                 </View>
               )}
 
               <View style={styles.titleCol}>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                  <Text style={[styles.name, { color: theme.text }]}>{filmmaker.name}</Text>
+                  <Text style={[styles.name, { color: theme.text }]}>{filmmaker.name || filmmaker.fullName || 'Filmmaker'}</Text>
                   <View style={[styles.roleBadge, { backgroundColor: '#242830', borderColor: theme.primary + '55' }]}>
                     <Text style={[styles.roleText, { color: theme.primary }]}>
-                      {filmmaker.role || 'Filmmaker'}
+                      ★ {filmmaker.primaryRole || (filmmaker.roles && filmmaker.roles[0]) || filmmaker.role || 'Filmmaker'}
                     </Text>
                   </View>
                 </View>
-                <Text style={[styles.metaSub, { color: theme.textSecondary }]}>
-                  @{filmmaker.username} • 📍 {filmmaker.location || 'Available Worldwide'}
+
+                {/* Secondary Roles if any */}
+                {(filmmaker.secondaryRoles?.length > 0 || (filmmaker.roles?.length > 1)) && (
+                  <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginTop: 4 }}>
+                    {(filmmaker.secondaryRoles || filmmaker.roles.slice(1)).map((sr, idx) => (
+                      <View key={idx} style={{ backgroundColor: theme.surface, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, borderWidth: 1, borderColor: theme.cardBorder }}>
+                        <Text style={{ color: theme.textSecondary, fontSize: 10, fontWeight: '600' }}>{sr}</Text>
+                      </View>
+                    ))}
+                  </View>
+                )}
+
+                <Text style={[styles.metaSub, { color: theme.textSecondary, marginTop: 4 }]}>
+                  @{filmmaker.username} {filmmaker.filmRoomId ? `• ${filmmaker.filmRoomId}` : ''} • 📍 {filmmaker.location || 'Available Worldwide'}
                 </Text>
               </View>
             </View>
@@ -374,6 +426,29 @@ export default function FilmmakerDetailModal({ visible, filmmaker, onClose, onSe
                     <Text style={[styles.shortlistBtnText, { color: theme.text }]}>★ Save</Text>
                   </TouchableOpacity>
                 )}
+
+                {/* Follow / Subscribe Button (Requirements 29, 57, 91) */}
+                <TouchableOpacity
+                  style={[
+                    styles.shortlistBtn,
+                    {
+                      backgroundColor: isFollowing ? '#1e3d29' : theme.surface,
+                      borderColor: isFollowing ? '#4ade80' : theme.cardBorder,
+                    },
+                  ]}
+                  onPress={handleToggleFollow}
+                  disabled={isTogglingFollow}
+                  activeOpacity={0.8}
+                >
+                  <Text
+                    style={[
+                      styles.shortlistBtnText,
+                      { color: isFollowing ? '#4ade80' : theme.text },
+                    ]}
+                  >
+                    {isFollowing ? '✓ Following' : '+ Follow'}
+                  </Text>
+                </TouchableOpacity>
 
                 {/* Direct Message Button (Requires connection) */}
                 <TouchableOpacity

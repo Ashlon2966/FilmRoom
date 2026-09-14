@@ -56,209 +56,167 @@ export const AVAILABILITY_CONFIG = {
 };
 
 export const UNION_STATUSES = [
+  'Non-Union',
   'SAG-AFTRA',
   'DGA',
   'WGA',
-  'Equity',
   'IATSE',
+  'Equity',
   'PGA',
-  'Non-Union',
+  'Other Guild',
+];
+
+/**
+ * The standard high-level professional roles for role-aware onboarding
+ * and ordered role assignment.
+ */
+export const CORE_PROFESSIONAL_ROLES = [
+  { id: 'Director', label: 'Director', icon: '🎬', department: 'Directing', category: ROLE_CATEGORIES.PRODUCTION },
+  { id: 'Actor', label: 'Actor', icon: '🎭', department: 'Cast', isActor: true, category: ROLE_CATEGORIES.TALENT },
+  { id: 'Producer', label: 'Producer', icon: '💼', department: 'Production', category: ROLE_CATEGORIES.PRODUCTION },
+  { id: 'Cinematographer', label: 'Cinematographer', icon: '🎥', department: 'Camera', category: ROLE_CATEGORIES.TALENT },
+  { id: 'Writer', label: 'Writer', icon: '✍️', department: 'Writing', category: ROLE_CATEGORIES.TALENT },
+  { id: 'Editor', label: 'Editor', icon: '✂️', department: 'Post-Production', category: ROLE_CATEGORIES.TALENT },
+  { id: 'Sound', label: 'Sound', icon: '🎙️', department: 'Sound', category: ROLE_CATEGORIES.TALENT },
+  { id: 'Casting Director', label: 'Casting Director', icon: '📋', department: 'Casting', category: ROLE_CATEGORIES.PRODUCTION },
+  { id: 'Production', label: 'Production (AD / Line Producer / UPM)', icon: '⏱️', department: 'Production', category: ROLE_CATEGORIES.PRODUCTION },
+  { id: 'Art Department', label: 'Art Department (Designer / Props)', icon: '🎨', department: 'Art', category: ROLE_CATEGORIES.TALENT },
+  { id: 'Costume', label: 'Costume & Wardrobe', icon: '👗', department: 'Costume', category: ROLE_CATEGORIES.TALENT },
+  { id: 'Makeup & Hair', label: 'Makeup & Hair (Beauty / SFX)', icon: '💄', department: 'Hair & Makeup', category: ROLE_CATEGORIES.TALENT },
+  { id: 'VFX', label: 'VFX (Visual Effects)', icon: '✨', department: 'VFX', category: ROLE_CATEGORIES.TALENT },
+  { id: 'Animation', label: 'Animation', icon: '🎞️', department: 'Animation', category: ROLE_CATEGORIES.TALENT },
+  { id: 'Photographer', label: 'Set Photographer / Stills', icon: '📸', department: 'Camera', category: ROLE_CATEGORIES.TALENT },
+  { id: 'Other Crew', label: 'Other Crew', icon: '🔧', department: 'Other', category: ROLE_CATEGORIES.TALENT },
 ];
 
 export const INDUSTRY_ROLES = [
   // --- TALENT ---
   {
-    name: 'Actor / Lead Talent',
+    name: 'Actor',
     category: ROLE_CATEGORIES.TALENT,
     department: 'Cast',
     isActor: true,
     capabilities: ['canReceiveCastingRequests', 'canSubmitInquiry', 'canManageRepresentation'],
   },
   {
-    name: 'Supporting Actor',
+    name: 'Director',
+    category: ROLE_CATEGORIES.PRODUCTION,
+    department: 'Directing',
+    isActor: false,
+    capabilities: ['canSearchTalent', 'canShortlistTalent', 'canRequestContact', 'canManageProduction'],
+  },
+  {
+    name: 'Producer',
+    category: ROLE_CATEGORIES.PRODUCTION,
+    department: 'Production',
+    isActor: false,
+    capabilities: ['canSearchTalent', 'canShortlistTalent', 'canRequestContact', 'canManageProduction'],
+  },
+  {
+    name: 'Cinematographer',
     category: ROLE_CATEGORIES.TALENT,
-    department: 'Cast',
-    isActor: true,
+    department: 'Camera',
+    isActor: false,
     capabilities: ['canReceiveCastingRequests', 'canSubmitInquiry', 'canManageRepresentation'],
   },
   {
-    name: 'Background Artist / Extra',
-    category: ROLE_CATEGORIES.TALENT,
-    department: 'Cast',
-    isActor: true,
-    capabilities: ['canReceiveCastingRequests', 'canSubmitInquiry'],
-  },
-  {
-    name: 'Voice Actor / Narrator',
-    category: ROLE_CATEGORIES.TALENT,
-    department: 'Cast',
-    isActor: true,
-    capabilities: ['canReceiveCastingRequests', 'canSubmitInquiry', 'canManageRepresentation'],
-  },
-  {
-    name: 'Screenwriter',
+    name: 'Writer',
     category: ROLE_CATEGORIES.TALENT,
     department: 'Writing',
     isActor: false,
     capabilities: ['canReceiveCastingRequests', 'canSubmitInquiry', 'canManageRepresentation'],
   },
   {
-    name: 'Cinematographer (DP / DOP)',
-    category: ROLE_CATEGORIES.TALENT,
-    department: 'Camera',
-    isActor: false,
-    capabilities: ['canReceiveCastingRequests', 'canSubmitInquiry', 'canManageRepresentation'],
-  },
-  {
-    name: 'Camera Operator',
-    category: ROLE_CATEGORIES.TALENT,
-    department: 'Camera',
-    isActor: false,
-    capabilities: ['canReceiveCastingRequests', 'canSubmitInquiry'],
-  },
-  {
-    name: 'Film Editor',
+    name: 'Editor',
     category: ROLE_CATEGORIES.TALENT,
     department: 'Post-Production',
     isActor: false,
     capabilities: ['canReceiveCastingRequests', 'canSubmitInquiry', 'canManageRepresentation'],
   },
   {
-    name: 'Sound Designer / Mixer',
+    name: 'Sound',
     category: ROLE_CATEGORIES.TALENT,
     department: 'Sound',
     isActor: false,
     capabilities: ['canReceiveCastingRequests', 'canSubmitInquiry'],
   },
   {
-    name: 'Composer / Music Supervisor',
-    category: ROLE_CATEGORIES.TALENT,
-    department: 'Music',
-    isActor: false,
-    capabilities: ['canReceiveCastingRequests', 'canSubmitInquiry', 'canManageRepresentation'],
-  },
-  {
-    name: 'Production Designer',
-    category: ROLE_CATEGORIES.TALENT,
-    department: 'Art',
-    isActor: false,
-    capabilities: ['canReceiveCastingRequests', 'canSubmitInquiry', 'canManageRepresentation'],
-  },
-  {
-    name: 'Costume Designer',
-    category: ROLE_CATEGORIES.TALENT,
-    department: 'Costume',
-    isActor: false,
-    capabilities: ['canReceiveCastingRequests', 'canSubmitInquiry'],
-  },
-  {
-    name: 'Key Makeup Artist & Hair',
-    category: ROLE_CATEGORIES.TALENT,
-    department: 'Hair & Makeup',
-    isActor: false,
-    capabilities: ['canReceiveCastingRequests', 'canSubmitInquiry'],
-  },
-  {
-    name: 'Stunt Coordinator / Performer',
-    category: ROLE_CATEGORIES.TALENT,
-    department: 'Stunts',
-    isActor: false,
-    capabilities: ['canReceiveCastingRequests', 'canSubmitInquiry'],
-  },
-  {
-    name: 'Gaffer / Lighting Lead',
-    category: ROLE_CATEGORIES.TALENT,
-    department: 'Lighting',
-    isActor: false,
-    capabilities: ['canReceiveCastingRequests', 'canSubmitInquiry'],
-  },
-  {
-    name: 'Key Grip / Rigging Lead',
-    category: ROLE_CATEGORIES.TALENT,
-    department: 'Grip',
-    isActor: false,
-    capabilities: ['canReceiveCastingRequests', 'canSubmitInquiry'],
-  },
-  {
-    name: 'Production Assistant (PA)',
-    category: ROLE_CATEGORIES.TALENT,
-    department: 'Production',
-    isActor: false,
-    capabilities: ['canReceiveCastingRequests', 'canSubmitInquiry'],
-  },
-
-  // --- PRODUCTION & HIRING ---
-  {
-    name: 'Film Director',
-    category: ROLE_CATEGORIES.PRODUCTION,
-    department: 'Directing',
-    isActor: false,
-    capabilities: ['canSearchTalent', 'canShortlistTalent', 'canRequestContact', 'canManageProduction'],
-  },
-  {
-    name: 'Film Producer / Exec Producer',
-    category: ROLE_CATEGORIES.PRODUCTION,
-    department: 'Production',
-    isActor: false,
-    capabilities: ['canSearchTalent', 'canShortlistTalent', 'canRequestContact', 'canManageProduction'],
-  },
-  {
     name: 'Casting Director',
-    category: ROLE_CATEGORIES.PRODUCTION,
-    department: 'Casting',
-    isActor: false,
-    capabilities: ['canSearchTalent', 'canShortlistTalent', 'canRequestContact', 'canManageCastingCalls'],
-  },
-  {
-    name: 'Casting Associate / Scout',
     category: ROLE_CATEGORIES.PRODUCTION,
     department: 'Casting',
     isActor: false,
     capabilities: ['canSearchTalent', 'canShortlistTalent', 'canRequestContact'],
   },
   {
-    name: 'Line Producer / UPM',
+    name: 'Production',
     category: ROLE_CATEGORIES.PRODUCTION,
-    department: 'Production Management',
+    department: 'Production',
     isActor: false,
-    capabilities: ['canSearchTalent', 'canShortlistTalent', 'canRequestContact', 'canManageProduction'],
+    capabilities: ['canManageProduction'],
   },
   {
-    name: '1st Assistant Director (1st AD)',
-    category: ROLE_CATEGORIES.PRODUCTION,
-    department: 'Directing',
+    name: 'Art Department',
+    category: ROLE_CATEGORIES.TALENT,
+    department: 'Art',
     isActor: false,
-    capabilities: ['canSearchTalent', 'canShortlistTalent', 'canRequestContact', 'canManageProduction'],
+    capabilities: ['canReceiveCastingRequests', 'canSubmitInquiry'],
   },
   {
-    name: 'Production House / Studio',
-    category: ROLE_CATEGORIES.PRODUCTION,
-    department: 'Studio Management',
+    name: 'Costume',
+    category: ROLE_CATEGORIES.TALENT,
+    department: 'Costume',
     isActor: false,
-    capabilities: ['canSearchTalent', 'canShortlistTalent', 'canRequestContact', 'canManageProduction'],
+    capabilities: ['canReceiveCastingRequests', 'canSubmitInquiry'],
   },
-
-  // --- REPRESENTATION ---
+  {
+    name: 'Makeup & Hair',
+    category: ROLE_CATEGORIES.TALENT,
+    department: 'Hair & Makeup',
+    isActor: false,
+    capabilities: ['canReceiveCastingRequests', 'canSubmitInquiry'],
+  },
+  {
+    name: 'VFX',
+    category: ROLE_CATEGORIES.TALENT,
+    department: 'VFX',
+    isActor: false,
+    capabilities: ['canReceiveCastingRequests', 'canSubmitInquiry'],
+  },
+  {
+    name: 'Animation',
+    category: ROLE_CATEGORIES.TALENT,
+    department: 'Animation',
+    isActor: false,
+    capabilities: ['canReceiveCastingRequests', 'canSubmitInquiry'],
+  },
+  {
+    name: 'Photographer',
+    category: ROLE_CATEGORIES.TALENT,
+    department: 'Camera',
+    isActor: false,
+    capabilities: ['canReceiveCastingRequests', 'canSubmitInquiry'],
+  },
+  {
+    name: 'Other Crew',
+    category: ROLE_CATEGORIES.TALENT,
+    department: 'Other',
+    isActor: false,
+    capabilities: ['canReceiveCastingRequests', 'canSubmitInquiry'],
+  },
+  // Representation
+  {
+    name: 'Talent Agent',
+    category: ROLE_CATEGORIES.REPRESENTATION,
+    department: 'Representation',
+    isActor: false,
+    capabilities: ['canRepresentTalent', 'canReceiveInquiriesForClients', 'canManageRoster'],
+  },
   {
     name: 'Talent Manager',
     category: ROLE_CATEGORIES.REPRESENTATION,
-    department: 'Talent Management',
+    department: 'Representation',
     isActor: false,
-    capabilities: ['canManageRepresentedTalent', 'canReceiveCastingRequests', 'canNegotiateInquiries'],
-  },
-  {
-    name: 'Talent Agent / Agency',
-    category: ROLE_CATEGORIES.REPRESENTATION,
-    department: 'Agency Representation',
-    isActor: false,
-    capabilities: ['canManageRepresentedTalent', 'canReceiveCastingRequests', 'canNegotiateInquiries'],
-  },
-  {
-    name: 'Artist Representative / Publicist',
-    category: ROLE_CATEGORIES.REPRESENTATION,
-    department: 'Publicity & Representation',
-    isActor: false,
-    capabilities: ['canManageRepresentedTalent', 'canReceiveCastingRequests'],
+    capabilities: ['canRepresentTalent', 'canReceiveInquiriesForClients', 'canManageRoster'],
   },
 ];
 
@@ -266,17 +224,38 @@ export const getRolesByCategory = (category) => {
   return INDUSTRY_ROLES.filter((r) => r.category === category);
 };
 
-export const getRoleDetails = (roleName) => {
-  return INDUSTRY_ROLES.find((r) => r.name === roleName) || {
-    name: roleName || 'Filmmaker',
-    category: ROLE_CATEGORIES.TALENT,
-    department: 'Crew',
-    isActor: false,
-    capabilities: ['canSubmitInquiry'],
-  };
+export const hasCapability = (roleName, capability) => {
+  const roleObj = INDUSTRY_ROLES.find((r) => r.name === roleName);
+  return !!roleObj?.capabilities?.includes(capability);
 };
 
-export const hasCapability = (roleName, capability) => {
-  const role = getRoleDetails(roleName);
-  return role.capabilities.includes(capability);
+/**
+ * Reordering helper for ordered professional roles
+ */
+export const reorderRoles = {
+  moveUp: (list, index) => {
+    if (index <= 0) return list;
+    const copy = [...list];
+    const temp = copy[index - 1];
+    copy[index - 1] = copy[index];
+    copy[index] = temp;
+    return copy;
+  },
+  moveDown: (list, index) => {
+    if (index >= list.length - 1) return list;
+    const copy = [...list];
+    const temp = copy[index + 1];
+    copy[index + 1] = copy[index];
+    copy[index] = temp;
+    return copy;
+  },
+  setAsPrimary: (list, index) => {
+    if (index <= 0) return list;
+    const item = list[index];
+    const remaining = list.filter((_, i) => i !== index);
+    return [item, ...remaining];
+  },
+  removeRole: (list, index) => {
+    return list.filter((_, i) => i !== index);
+  },
 };

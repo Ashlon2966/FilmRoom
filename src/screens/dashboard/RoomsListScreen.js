@@ -22,6 +22,7 @@ import { useTheme } from '../../context/ThemeContext';
 import ProductionCallCard from '../../components/ProductionCallCard';
 import SubmitInterestModal from '../../components/SubmitInterestModal';
 import SubmitReelModal from '../../components/SubmitReelModal';
+import ApplyRoleModal from '../../components/ApplyRoleModal';
 import PostProductionCallModal from '../../components/PostProductionCallModal';
 import EditRoomModal from '../../components/EditRoomModal';
 import NotificationCenterModal from '../../components/NotificationCenterModal';
@@ -39,6 +40,8 @@ export default function RoomsListScreen({ navigation }) {
 
   // Modals
   const [submitInterestVisible, setSubmitInterestVisible] = useState(false);
+  const [applyRoleModalVisible, setApplyRoleModalVisible] = useState(false);
+  const [appliedRole, setAppliedRole] = useState('');
   const [selectedCall, setSelectedCall] = useState(null);
   const [postCallModalVisible, setPostCallModalVisible] = useState(false);
   const [roomToEdit, setRoomToEdit] = useState(null);
@@ -110,18 +113,18 @@ export default function RoomsListScreen({ navigation }) {
     navigation.navigate('StagePipeline', { screen: 'Stage1_Ideation' });
   };
 
-  const handleExpressInterest = (call) => {
+  const handleApplyCall = (call) => {
     if (!currentUser) {
       Alert.alert('Sign In Required', 'Please sign in to submit interest.');
       return;
     }
     if (call.createdBy === currentUser.uid) {
-      Alert.alert('Your Production Call', 'You posted this crew call to The Board.');
+      Alert.alert('Your Production Call', 'You posted this crew call to The Board. Tap "Edit Call" to modify requirements.');
       return;
     }
 
     setSelectedCall(call);
-    setSubmitInterestVisible(true);
+    setApplyRoleModalVisible(true);
   };
 
   return (
@@ -250,19 +253,26 @@ export default function RoomsListScreen({ navigation }) {
                 <Text style={[styles.roomTitle, { color: theme?.primary || '#f5a623' }]}>
                   {item.title}
                 </Text>
-                <View style={[styles.stagePill, { backgroundColor: '#2a2215' }]}>
-                  <Text style={[styles.stagePillText, { color: theme?.primary || '#f5a623' }]}>
-                    Stage {(item.currentStage || 0) + 1}
-                  </Text>
+                <View style={{ flexDirection: 'row', gap: 6, alignItems: 'center' }}>
+                  <View style={[styles.stagePill, { backgroundColor: item.visibility === 'PUBLIC' ? '#1e3d29' : '#242830' }]}>
+                    <Text style={[styles.stagePillText, { color: item.visibility === 'PUBLIC' ? '#4ade80' : theme?.textSecondary || '#9ca3af' }]}>
+                      {item.visibility || 'PUBLIC'}
+                    </Text>
+                  </View>
+                  <View style={[styles.stagePill, { backgroundColor: '#2a2215' }]}>
+                    <Text style={[styles.stagePillText, { color: theme?.primary || '#f5a623' }]}>
+                      Stage {(item.currentStage || 0) + 1}
+                    </Text>
+                  </View>
                 </View>
               </View>
 
               <Text style={[styles.roomGenre, { color: theme?.textSecondary || '#9ca3af' }]}>
-                Genre: {item.genre || 'Film'} • {Object.keys(item.members || {}).length} Crew Members
+                {item.projectType || 'Film'} • {Object.keys(item.members || {}).length} Crew • {item.crewRequirements?.length ? `${item.crewRequirements.length} Open Roles` : 'Crew Set'}
               </Text>
 
               <Text style={[styles.roomLogline, { color: theme?.text || '#ffffff' }]} numberOfLines={2}>
-                {item.logline}
+                {item.logline || 'Production in progress.'}
               </Text>
 
               <View style={styles.enterRow}>
@@ -307,7 +317,8 @@ export default function RoomsListScreen({ navigation }) {
           renderItem={({ item }) => (
             <ProductionCallCard
               project={item}
-              onExpressInterest={() => handleExpressInterest(item)}
+              onExpressInterest={() => handleApplyCall(item)}
+              onApply={() => handleApplyCall(item)}
               onEditCall={() => setCallToEdit(item)}
             />
           )}
@@ -325,7 +336,21 @@ export default function RoomsListScreen({ navigation }) {
         />
       )}
 
-      {/* Flow B Modal for Crew Call Submissions */}
+      {/* Role Selection Pop-up for Specified Role Application */}
+      <ApplyRoleModal
+        visible={applyRoleModalVisible}
+        call={selectedCall}
+        onClose={() => {
+          setApplyRoleModalVisible(false);
+        }}
+        onSelectRole={(roleName) => {
+          setApplyRoleModalVisible(false);
+          setAppliedRole(roleName);
+          setSubmitInterestVisible(true);
+        }}
+      />
+
+      {/* Flow B Modal for Crew / Casting Call Submissions */}
       {selectedCall && (
         <SubmitReelModal
           visible={submitInterestVisible}
@@ -336,14 +361,17 @@ export default function RoomsListScreen({ navigation }) {
             category: 'PRODUCTION',
           }}
           initialProject={selectedCall.title}
-          initialRole={selectedCall.neededRoles?.[0] || ''}
+          initialRole={appliedRole || selectedCall.characterName || selectedCall.neededRoles?.[0] || selectedCall.roleName || ''}
+          callData={selectedCall}
           onClose={() => {
             setSubmitInterestVisible(false);
             setSelectedCall(null);
+            setAppliedRole('');
           }}
           onSuccess={() => {
             setSubmitInterestVisible(false);
             setSelectedCall(null);
+            setAppliedRole('');
           }}
         />
       )}
@@ -368,6 +396,15 @@ export default function RoomsListScreen({ navigation }) {
         roomId={roomToEdit?.id}
         roomData={roomToEdit}
         onClose={() => setRoomToEdit(null)}
+        onUpdated={(updated) => {
+          setMyRooms((prev) =>
+            prev.map((r) => (r.id === updated.id ? { ...r, ...updated } : r))
+          );
+        }}
+        onDeleted={(deletedId) => {
+          setMyRooms((prev) => prev.filter((r) => r.id !== deletedId));
+          setRoomToEdit(null);
+        }}
       />
 
       {/* In-App Notification Center */}

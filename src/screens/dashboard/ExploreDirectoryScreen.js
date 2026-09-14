@@ -7,6 +7,9 @@ import {
   TextInput,
   TouchableOpacity,
   ActivityIndicator,
+  Modal,
+  Alert,
+  ScrollView,
 } from 'react-native';
 import {
   collection,
@@ -14,27 +17,57 @@ import {
   limit,
   startAfter,
   getDocs,
+  where,
+  onSnapshot,
 } from 'firebase/firestore';
 import { db } from '../../../firebaseConfig';
 import { useAuth } from '../../context/AuthContext';
+import { useRoom } from '../../context/RoomContext';
 import { useTheme } from '../../context/ThemeContext';
 import TalentCard from '../../components/TalentCard';
 import FilterModal from '../../components/FilterModal';
+import QuickProfileModal from '../../components/QuickProfileModal';
 import FilmmakerDetailModal from '../../components/FilmmakerDetailModal';
+import ProductionCallCard from '../../components/ProductionCallCard';
+import SubmitReelModal from '../../components/SubmitReelModal';
+import PostProductionCallModal from '../../components/PostProductionCallModal';
+import ApplyRoleModal from '../../components/ApplyRoleModal';
 import NotificationCenterModal from '../../components/NotificationCenterModal';
 import { streamNotifications } from '../../services/notificationService';
+import {
+  streamSavedSearches,
+  saveSearchCriteria,
+  deleteSavedSearch,
+} from '../../services/userService';
+import {
+  getRecentHistory,
+  addRecentHistoryItem,
+  clearRecentHistory,
+} from '../../services/historyService';
 
 const PAGE_SIZE = 20;
 
 export default function ExploreDirectoryScreen({ navigation }) {
   const { theme } = useTheme();
   const { currentUser } = useAuth();
+  const { switchRoom } = useRoom();
 
+  // Active Explore Section: 'FILMMAKERS' | 'CALLS' | 'ROOMS'
+  const [activeTab, setActiveTab] = useState('FILMMAKERS');
+
+  // Filmmakers Data
   const [talents, setTalents] = useState([]);
   const [lastVisibleDoc, setLastVisibleDoc] = useState(null);
-  const [currentPage, setCurrentPage] = useState(1);
-  const [loading, setLoading] = useState(false);
-  const [hasMore, setHasMore] = useState(true);
+  const [loadingTalents, setLoadingTalents] = useState(false);
+  const [hasMoreTalents, setHasMoreTalents] = useState(true);
+
+  // Crew Calls Data
+  const [productionCalls, setProductionCalls] = useState([]);
+  const [loadingCalls, setLoadingCalls] = useState(false);
+
+  // Public Production Rooms Data
+  const [publicRooms, setPublicRooms] = useState([]);
+  const [loadingRooms, setLoadingRooms] = useState(false);
 
   // Search & Filter States
   const [searchQuery, setSearchQuery] = useState('');
@@ -49,10 +82,23 @@ export default function ExploreDirectoryScreen({ navigation }) {
     skillKeyword: '',
   });
 
-  const [selectedFilmmaker, setSelectedFilmmaker] = useState(null);
+  // Saved Searches
+  const [savedSearches, setSavedSearches] = useState([]);
+  const [saveSearchModalVisible, setSaveSearchModalVisible] = useState(false);
+  const [newSearchTitle, setNewSearchTitle] = useState('');
+
+  // Modals & Selected items
+  const [quickProfileUser, setQuickProfileUser] = useState(null);
+  const [detailedFilmmaker, setDetailedFilmmaker] = useState(null);
+  const [selectedCall, setSelectedCall] = useState(null);
+  const [submitReelVisible, setSubmitReelVisible] = useState(false);
+  const [applyRoleModalVisible, setApplyRoleModalVisible] = useState(false);
+  const [appliedRole, setAppliedRole] = useState('');
+  const [callToEdit, setCallToEdit] = useState(null);
   const [notificationsVisible, setNotificationsVisible] = useState(false);
   const [notifications, setNotifications] = useState([]);
 
+  // Stream in-app notifications
   useEffect(() => {
     if (!currentUser?.uid) return;
     const unsub = streamNotifications(currentUser.uid, (list) => {
@@ -63,6 +109,16 @@ export default function ExploreDirectoryScreen({ navigation }) {
 
   const unreadNotificationCount = notifications.filter((n) => !n.isRead).length;
 
+  // Stream Saved Searches for current user
+  useEffect(() => {
+    if (!currentUser?.uid) return;
+    const unsub = streamSavedSearches(currentUser.uid, (list) => {
+      setSavedSearches(list);
+    });
+    return () => unsub();
+  }, [currentUser?.uid]);
+
+  // Determine if filters are active
   const isFiltered =
     activeFilters.status !== 'ALL' ||
     activeFilters.category !== 'ALL' ||
@@ -72,9 +128,79 @@ export default function ExploreDirectoryScreen({ navigation }) {
     activeFilters.region !== '' ||
     activeFilters.skillKeyword !== '';
 
-  // Load first page from Firestore
-  const fetchFirstPage = async () => {
-    setLoading(true);
+  // Recent History State (Requirement 28 & 63)
+  const [recentHistory, setRecentHistory] = useState([]);
+
+  useEffect(() => {
+    getRecentHistory().then(setRecentHistory);
+  }, []);
+
+  const handleOpenFilmmaker = (item) => {
+    if (!item) return;
+    const title = item.fullName || item.displayName || item.name || 'Filmmaker';
+    const subtitle = item.primaryRole || item.role || 'Talent';
+    addRecentHistoryItem({
+      id: item.id,
+      type: 'PROFILE',
+      title,
+      subtitle,
+      data: item,
+    }).then(setRecentHistory);
+    setQuickProfileUser(item);
+  };
+
+  const handleOpenRoom = (room) => {
+    if (!room) return;
+    addRecentHistoryItem({
+      id: room.id,
+      type: 'ROOM',
+      title: room.title || 'Production Room',
+      subtitle: room.genre || 'Room',
+      data: room,
+    }).then(setRecentHistory);
+    switchRoom(room.id);
+    navigation.navigate('TheBoardTab', {
+      screen: 'StagePipeline',
+      params: { screen: 'Stage1_Ideation' },
+    });
+  };
+
+  const handleOpenCall = (call) => {
+    if (!call) return;
+    addRecentHistoryItem({
+      id: call.id,
+      type: 'CALL',
+      title: call.title || 'Crew Call',
+      subtitle: call.department || call.location || 'Call',
+      data: call,
+    }).then(setRecentHistory);
+    setSelectedCall(call);
+  };
+
+  const handleReopenHistoryItem = (item) => {
+    if (item.type === 'PROFILE') {
+      if (item.data) {
+        setQuickProfileUser(item.data);
+      } else {
+        setSearchQuery(item.title);
+      }
+    } else if (item.type === 'ROOM') {
+      switchRoom(item.id);
+      navigation.navigate('TheBoardTab', {
+        screen: 'StagePipeline',
+        params: { screen: 'Stage1_Ideation' },
+      });
+    } else if (item.type === 'CALL') {
+      if (item.data) setSelectedCall(item.data);
+      else setSearchQuery(item.title);
+    } else if (item.type === 'SEARCH') {
+      setSearchQuery(item.title);
+    }
+  };
+
+  // 1. Fetch Filmmakers (Cursor-based)
+  const fetchFirstTalentsPage = async () => {
+    setLoadingTalents(true);
     try {
       const usersRef = collection(db, 'users');
       const q = query(usersRef, limit(PAGE_SIZE));
@@ -83,20 +209,17 @@ export default function ExploreDirectoryScreen({ navigation }) {
       const list = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
       setTalents(list);
       setLastVisibleDoc(snap.docs[snap.docs.length - 1] || null);
-      setHasMore(snap.docs.length === PAGE_SIZE);
-      setCurrentPage(1);
+      setHasMoreTalents(snap.docs.length === PAGE_SIZE);
     } catch (e) {
-      console.error('Fetch users error:', e);
+      console.warn('Fetch users notice:', e.message);
     } finally {
-      setLoading(false);
+      setLoadingTalents(false);
     }
   };
 
-  // Cursor-based pagination
-  const fetchNextPage = async () => {
-    if (!lastVisibleDoc || !hasMore || loading) return;
-
-    setLoading(true);
+  const fetchNextTalentsPage = async () => {
+    if (!lastVisibleDoc || !hasMoreTalents || loadingTalents) return;
+    setLoadingTalents(true);
     try {
       const usersRef = collection(db, 'users');
       const q = query(usersRef, startAfter(lastVisibleDoc), limit(PAGE_SIZE));
@@ -106,32 +229,76 @@ export default function ExploreDirectoryScreen({ navigation }) {
         const nextList = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
         setTalents((prev) => [...prev, ...nextList]);
         setLastVisibleDoc(snap.docs[snap.docs.length - 1]);
-        setHasMore(snap.docs.length === PAGE_SIZE);
-        setCurrentPage((prev) => prev + 1);
+        setHasMoreTalents(snap.docs.length === PAGE_SIZE);
       } else {
-        setHasMore(false);
+        setHasMoreTalents(false);
       }
     } catch (e) {
-      console.error('Fetch next page error:', e);
+      console.warn('Fetch next users notice:', e.message);
     } finally {
-      setLoading(false);
+      setLoadingTalents(false);
     }
   };
 
+  // 2. Stream Public Production Calls
   useEffect(() => {
-    fetchFirstPage();
+    setLoadingCalls(true);
+    const callsRef = collection(db, 'production_calls');
+    const unsub = onSnapshot(
+      callsRef,
+      (snap) => {
+        const calls = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        calls.sort((a, b) => {
+          const tA = a.createdAt?.seconds || 0;
+          const tB = b.createdAt?.seconds || 0;
+          return tB - tA;
+        });
+        setProductionCalls(calls);
+        setLoadingCalls(false);
+      },
+      (err) => {
+        console.warn('Calls stream notice:', err.message);
+        setLoadingCalls(false);
+      }
+    );
+    return () => unsub();
   }, []);
 
-  // Filter out current user and apply active filters
-  const filteredList = talents.filter((t) => {
-    // Exclude current user from talent directory
+  // 3. Stream Public Production Rooms
+  useEffect(() => {
+    setLoadingRooms(true);
+    const roomsRef = collection(db, 'rooms');
+    const q = query(roomsRef, where('visibility', '==', 'PUBLIC'));
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        const rooms = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        setPublicRooms(rooms);
+        setLoadingRooms(false);
+      },
+      (err) => {
+        console.warn('Public rooms stream notice:', err.message);
+        setLoadingRooms(false);
+      }
+    );
+    return () => unsub();
+  }, []);
+
+  useEffect(() => {
+    fetchFirstTalentsPage();
+  }, []);
+
+  // Deterministic Filtering for Filmmakers (Strictly zero AI)
+  const filteredTalents = talents.filter((t) => {
     if (currentUser?.uid && t.id === currentUser.uid) return false;
 
-    // 1. Availability Status Filter
+    // Discoverability check
+    if (t.discoverability === 'HIDDEN') return false;
+
+    // 1. Availability Filter
     if (activeFilters.status !== 'ALL') {
-      const userStatus =
-        t.availability?.status || (t.isAvailable !== false ? 'AVAILABLE' : 'BUSY');
-      if (userStatus !== activeFilters.status) return false;
+      const status = t.availability?.status || (t.isAvailable !== false ? 'AVAILABLE' : 'BUSY');
+      if (status !== activeFilters.status) return false;
     }
 
     // 2. Category Filter
@@ -142,7 +309,10 @@ export default function ExploreDirectoryScreen({ navigation }) {
     // 3. Role Filter
     if (activeFilters.role !== 'All') {
       const matchRole =
-        t.role === activeFilters.role || (t.roles && t.roles.includes(activeFilters.role));
+        t.role === activeFilters.role ||
+        t.primaryRole === activeFilters.role ||
+        (Array.isArray(t.roles) && t.roles.includes(activeFilters.role)) ||
+        (Array.isArray(t.secondaryRoles) && t.secondaryRoles.includes(activeFilters.role));
       if (!matchRole) return false;
     }
 
@@ -159,13 +329,14 @@ export default function ExploreDirectoryScreen({ navigation }) {
       if (currentUnion !== activeFilters.unionStatus) return false;
     }
 
-    // 6. Region Filter
+    // 6. Region / Location Filter
     if (activeFilters.region) {
-      const loc = (t.location || t.city || '').toLowerCase();
-      if (!loc.includes(activeFilters.region.toLowerCase())) return false;
+      const reg = activeFilters.region.toLowerCase();
+      const loc = (t.location || t.city || t.stateRegion || t.country || '').toLowerCase();
+      if (!loc.includes(reg)) return false;
     }
 
-    // 7. Skill / Gear / Language Keyword Filter
+    // 7. Skill / Equipment Keyword Filter
     if (activeFilters.skillKeyword) {
       const kw = activeFilters.skillKeyword.toLowerCase();
       const gearMatch = (t.equipment || []).some((item) => item.toLowerCase().includes(kw));
@@ -176,149 +347,585 @@ export default function ExploreDirectoryScreen({ navigation }) {
       if (!gearMatch && !bioMatch && !langMatch) return false;
     }
 
-    // Text Search Bar Query Filter
+    // Free Text Search Filter
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
       const nameMatch = (t.fullName || t.displayName || t.name || '').toLowerCase().includes(q);
       const userMatch = (t.username || '').toLowerCase().includes(q);
-      const roleMatch = (t.role || (t.roles && t.roles.join(' ')) || '').toLowerCase().includes(q);
+      const frIdMatch = (t.filmRoomId || '').toLowerCase().includes(q);
+      const roleMatch = (
+        (t.primaryRole || '') +
+        ' ' +
+        (t.role || '') +
+        ' ' +
+        (t.roles || []).join(' ') +
+        ' ' +
+        (t.secondaryRoles || []).join(' ')
+      )
+        .toLowerCase()
+        .includes(q);
+      const locMatch = (t.location || t.city || t.stateRegion || t.country || '')
+        .toLowerCase()
+        .includes(q);
       const bioMatch = (t.bio || '').toLowerCase().includes(q);
-      if (!nameMatch && !userMatch && !roleMatch && !bioMatch) return false;
+
+      if (!nameMatch && !userMatch && !frIdMatch && !roleMatch && !locMatch && !bioMatch) {
+        return false;
+      }
     }
 
     return true;
   });
 
+  // Filtered Crew Calls
+  const filteredCalls = productionCalls.filter((call) => {
+    if (!searchQuery.trim()) return true;
+    const q = searchQuery.toLowerCase();
+    const titleMatch = (call.title || '').toLowerCase().includes(q);
+    const dirMatch = (call.director || '').toLowerCase().includes(q);
+    const loglineMatch = (call.logline || '').toLowerCase().includes(q);
+    const rolesMatch = (call.neededRoles || []).join(' ').toLowerCase().includes(q);
+    const locMatch = (call.location || '').toLowerCase().includes(q);
+    return titleMatch || dirMatch || loglineMatch || rolesMatch || locMatch;
+  });
+
+  // Filtered Public Rooms
+  const filteredRooms = publicRooms.filter((room) => {
+    if (!searchQuery.trim()) return true;
+    const q = searchQuery.toLowerCase();
+    const titleMatch = (room.title || '').toLowerCase().includes(q);
+    const typeMatch = (room.projectType || '').toLowerCase().includes(q);
+    const loglineMatch = (room.logline || '').toLowerCase().includes(q);
+    const rolesMatch = (room.crewRequirements || [])
+      .map((r) => r.role)
+      .join(' ')
+      .toLowerCase()
+      .includes(q);
+    return titleMatch || typeMatch || loglineMatch || rolesMatch;
+  });
+
+  // Save Search Criteria Handler
+  const handleSaveCurrentSearch = async () => {
+    if (!newSearchTitle.trim()) {
+      Alert.alert('Title Required', 'Please enter a name for this saved search.');
+      return;
+    }
+    if (!currentUser?.uid) return;
+
+    try {
+      await saveSearchCriteria(currentUser.uid, newSearchTitle.trim(), {
+        searchQuery,
+        activeFilters,
+      });
+      setNewSearchTitle('');
+      setSaveSearchModalVisible(false);
+      Alert.alert('✓ Search Saved', 'Your filter set is saved for 1-tap recall.');
+    } catch (err) {
+      Alert.alert('Error', err.message || 'Could not save search.');
+    }
+  };
+
+  const handleApplySavedSearch = (saved) => {
+    if (saved.criteria?.searchQuery !== undefined) {
+      setSearchQuery(saved.criteria.searchQuery);
+    }
+    if (saved.criteria?.activeFilters) {
+      setActiveFilters(saved.criteria.activeFilters);
+    }
+  };
+
+  const handleDeleteSavedSearch = (searchId) => {
+    Alert.alert('Remove Saved Search', 'Do you want to delete this saved filter set?', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: () => {
+          if (currentUser?.uid) deleteSavedSearch(currentUser.uid, searchId);
+        },
+      },
+    ]);
+  };
+
+  // Crew Call Application Flow
+  const handleApplyCall = (call) => {
+    if (!currentUser) {
+      Alert.alert('Sign In Required', 'Please sign in to apply for production calls.');
+      return;
+    }
+    if (call.createdBy === currentUser.uid) {
+      Alert.alert('Your Production Call', 'You posted this crew call. Tap "Edit Call" to modify requirements or roles.');
+      return;
+    }
+    setSelectedCall(call);
+    setApplyRoleModalVisible(true);
+  };
+
   return (
-    <View style={[styles.container, { backgroundColor: theme.background }]}>
-      {/* Top Header */}
-      <View style={[styles.header, { backgroundColor: theme.surface, borderBottomColor: theme.cardBorder }]}>
-        <View style={styles.headerTitleRow}>
-          <Text style={[styles.mainTitle, { color: theme.text }]}>
-            CREW <Text style={{ color: theme.primary }}>DIRECTORY</Text>
+    <View style={[styles.container, { backgroundColor: theme.background || '#0c0d0e' }]}>
+      {/* Top Pinned Bar */}
+      <View style={[styles.header, { backgroundColor: theme.surface || '#121417', borderBottomColor: theme.cardBorder || '#242830' }]}>
+        <View style={styles.headerTopRow}>
+          <Text style={[styles.headerTitle, { color: theme.text || '#ffffff' }]}>
+            DISCOVER <Text style={{ color: theme.primary || '#f5a623' }}>INDUSTRY</Text>
           </Text>
 
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          <View style={styles.headerRightActions}>
             <TouchableOpacity
               style={[
-                styles.bellBtn,
+                styles.iconBtn,
                 {
-                  backgroundColor: theme.card,
-                  borderColor: theme.cardBorder,
+                  backgroundColor: theme.card || '#181b1f',
+                  borderColor: theme.cardBorder || '#242830',
                 },
               ]}
               onPress={() => setNotificationsVisible(true)}
-              activeOpacity={0.8}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
             >
               <Text style={{ fontSize: 15 }}>🔔</Text>
               {unreadNotificationCount > 0 && (
-                <View style={[styles.bellBadge, { backgroundColor: theme.primary }]}>
+                <View style={[styles.bellBadge, { backgroundColor: theme.primary || '#f5a623' }]}>
                   <Text style={styles.bellBadgeText}>
                     {unreadNotificationCount > 9 ? '9+' : unreadNotificationCount}
                   </Text>
                 </View>
               )}
             </TouchableOpacity>
-
-            {/* Filter Trigger Button */}
-            <TouchableOpacity
-              style={[
-                styles.filterIconBtn,
-                {
-                  backgroundColor: isFiltered ? '#242830' : theme.card,
-                  borderColor: isFiltered ? theme.primary : theme.cardBorder,
-                },
-              ]}
-              onPress={() => setIsFilterModalOpen(true)}
-              activeOpacity={0.8}
-            >
-              <Text style={{ fontSize: 13 }}>🎛</Text>
-              <Text
-                style={[
-                  styles.filterBtnText,
-                  { color: isFiltered ? theme.primary : theme.text },
-                ]}
-              >
-                Filter
-              </Text>
-              {isFiltered && <View style={[styles.activeDot, { backgroundColor: theme.primary }]} />}
-            </TouchableOpacity>
           </View>
         </View>
 
-        <Text style={[styles.sub, { color: theme.textSecondary }]}>
-          {filteredList.length} Verified Filmmakers in Network
-        </Text>
+        {/* 3 Workspace Tabs */}
+        <View style={styles.tabBar}>
+          <TouchableOpacity
+            style={[
+              styles.tabItem,
+              activeTab === 'FILMMAKERS' && {
+                borderBottomColor: theme.primary || '#f5a623',
+                borderBottomWidth: 2,
+              },
+            ]}
+            onPress={() => setActiveTab('FILMMAKERS')}
+          >
+            <Text
+              style={[
+                styles.tabText,
+                {
+                  color:
+                    activeTab === 'FILMMAKERS'
+                      ? theme.primary || '#f5a623'
+                      : theme.textSecondary || '#9ca3af',
+                },
+              ]}
+            >
+              Filmmakers ({filteredTalents.length})
+            </Text>
+          </TouchableOpacity>
 
-        {/* Search Bar */}
-        <View style={[styles.searchBox, { backgroundColor: theme.card, borderColor: theme.cardBorder }]}>
+          <TouchableOpacity
+            style={[
+              styles.tabItem,
+              activeTab === 'CALLS' && {
+                borderBottomColor: theme.primary || '#f5a623',
+                borderBottomWidth: 2,
+              },
+            ]}
+            onPress={() => setActiveTab('CALLS')}
+          >
+            <Text
+              style={[
+                styles.tabText,
+                {
+                  color:
+                    activeTab === 'CALLS'
+                      ? theme.primary || '#f5a623'
+                      : theme.textSecondary || '#9ca3af',
+                },
+              ]}
+            >
+              Crew Calls ({filteredCalls.length})
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[
+              styles.tabItem,
+              activeTab === 'ROOMS' && {
+                borderBottomColor: theme.primary || '#f5a623',
+                borderBottomWidth: 2,
+              },
+            ]}
+            onPress={() => setActiveTab('ROOMS')}
+          >
+            <Text
+              style={[
+                styles.tabText,
+                {
+                  color:
+                    activeTab === 'ROOMS'
+                      ? theme.primary || '#f5a623'
+                      : theme.textSecondary || '#9ca3af',
+                },
+              ]}
+            >
+              Public Rooms ({filteredRooms.length})
+            </Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* Search Input Box */}
+        <View style={[styles.searchBox, { backgroundColor: theme.card || '#181b1f', borderColor: theme.cardBorder || '#242830' }]}>
           <TextInput
-            style={[styles.searchInput, { color: theme.text }]}
-            placeholder="Search by name, handle, role, or craft..."
-            placeholderTextColor={theme.textMuted}
+            style={[styles.searchInput, { color: theme.text || '#ffffff' }]}
+            placeholder={
+              activeTab === 'FILMMAKERS'
+                ? 'Search by name, handle, FR-ID, craft, or gear...'
+                : activeTab === 'CALLS'
+                ? 'Search crew calls by title, department, or location...'
+                : 'Search public rooms by title, genre, or needed roles...'
+            }
+            placeholderTextColor={theme.textMuted || '#64748b'}
             value={searchQuery}
             onChangeText={setSearchQuery}
           />
+          {searchQuery.length > 0 && (
+            <TouchableOpacity onPress={() => setSearchQuery('')} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+              <Text style={{ color: theme.textMuted || '#64748b', fontSize: 14 }}>✕</Text>
+            </TouchableOpacity>
+          )}
         </View>
+
+        {/* Active Filters & Saved Searches Bar (Filmmakers Tab Only) */}
+        {activeTab === 'FILMMAKERS' && (
+          <View style={styles.filterAssistContainer}>
+            {/* Active filter pills */}
+            {isFiltered && (
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipsScroll}>
+                {activeFilters.role !== 'All' && (
+                  <View style={[styles.filterChip, { backgroundColor: '#242830' }]}>
+                    <Text style={[styles.filterChipText, { color: theme.primary || '#f5a623' }]}>
+                      Role: {activeFilters.role}
+                    </Text>
+                    <TouchableOpacity onPress={() => setActiveFilters((prev) => ({ ...prev, role: 'All' }))}>
+                      <Text style={styles.chipRemove}>✕</Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
+                {activeFilters.status !== 'ALL' && (
+                  <View style={[styles.filterChip, { backgroundColor: '#242830' }]}>
+                    <Text style={[styles.filterChipText, { color: theme.primary || '#f5a623' }]}>
+                      {activeFilters.status}
+                    </Text>
+                    <TouchableOpacity onPress={() => setActiveFilters((prev) => ({ ...prev, status: 'ALL' }))}>
+                      <Text style={styles.chipRemove}>✕</Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
+                {activeFilters.region !== '' && (
+                  <View style={[styles.filterChip, { backgroundColor: '#242830' }]}>
+                    <Text style={[styles.filterChipText, { color: theme.primary || '#f5a623' }]}>
+                      Region: {activeFilters.region}
+                    </Text>
+                    <TouchableOpacity onPress={() => setActiveFilters((prev) => ({ ...prev, region: '' }))}>
+                      <Text style={styles.chipRemove}>✕</Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
+                {activeFilters.unionStatus !== 'All' && (
+                  <View style={[styles.filterChip, { backgroundColor: '#242830' }]}>
+                    <Text style={[styles.filterChipText, { color: theme.primary || '#f5a623' }]}>
+                      {activeFilters.unionStatus}
+                    </Text>
+                    <TouchableOpacity onPress={() => setActiveFilters((prev) => ({ ...prev, unionStatus: 'All' }))}>
+                      <Text style={styles.chipRemove}>✕</Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
+                <TouchableOpacity
+                  style={[styles.filterChip, { backgroundColor: '#331b1b', borderColor: '#ef4444', borderWidth: 1 }]}
+                  onPress={() =>
+                    setActiveFilters({
+                      status: 'ALL',
+                      category: 'ALL',
+                      role: 'All',
+                      representation: 'ALL',
+                      unionStatus: 'All',
+                      region: '',
+                      skillKeyword: '',
+                    })
+                  }
+                >
+                  <Text style={{ color: '#f87171', fontSize: 11, fontWeight: '700' }}>Reset Filters</Text>
+                </TouchableOpacity>
+              </ScrollView>
+            )}
+
+            {/* Recent History & Filter Section (Requirement 28) */}
+            <View style={styles.recentHistoryContainer}>
+              <View style={styles.historyHeaderRow}>
+                <Text style={[styles.historySectionTitle, { color: theme.textSecondary || '#9ca3af' }]}>
+                  RECENT HISTORY
+                </Text>
+                {recentHistory.length > 0 && (
+                  <TouchableOpacity onPress={() => clearRecentHistory().then(() => setRecentHistory([]))}>
+                    <Text style={{ fontSize: 11, color: theme.textMuted || '#64748b' }}>Clear</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+
+              <View style={styles.historyAndFilterRow}>
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={{ alignItems: 'center', gap: 8, paddingRight: 8 }}
+                  style={{ flex: 1 }}
+                >
+                  {recentHistory.length === 0 ? (
+                    <Text style={{ fontSize: 12, color: theme.textMuted || '#64748b', fontStyle: 'italic' }}>
+                      No recent history yet
+                    </Text>
+                  ) : (
+                    recentHistory.map((h) => {
+                      const icon =
+                        h.type === 'PROFILE' ? '👤' : h.type === 'ROOM' ? '🎬' : h.type === 'CALL' ? '📢' : '🔍';
+                      return (
+                        <TouchableOpacity
+                          key={`${h.type}_${h.id}`}
+                          style={[
+                            styles.historyPill,
+                            {
+                              backgroundColor: theme.card || '#181b1f',
+                              borderColor: theme.cardBorder || '#242830',
+                            },
+                          ]}
+                          onPress={() => handleReopenHistoryItem(h)}
+                        >
+                          <Text style={{ fontSize: 12, marginRight: 4 }}>{icon}</Text>
+                          <Text
+                            style={[styles.historyPillText, { color: theme.text || '#ffffff' }]}
+                            numberOfLines={1}
+                          >
+                            {h.title}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })
+                  )}
+                </ScrollView>
+
+                {/* Filter button positioned on the right side of History section (Requirement 28) */}
+                <TouchableOpacity
+                  style={[
+                    styles.filterBtnInline,
+                    {
+                      backgroundColor: isFiltered ? '#242830' : theme.card || '#181b1f',
+                      borderColor: isFiltered ? theme.primary || '#f5a623' : theme.cardBorder || '#242830',
+                    },
+                  ]}
+                  onPress={() => setIsFilterModalOpen(true)}
+                  activeOpacity={0.8}
+                >
+                  <Text style={{ fontSize: 12 }}>🎛</Text>
+                  <Text
+                    style={[
+                      styles.filterBtnText,
+                      { color: isFiltered ? theme.primary || '#f5a623' : theme.text || '#ffffff' },
+                    ]}
+                  >
+                    Filter
+                  </Text>
+                  {isFiltered && (
+                    <View style={[styles.activeDot, { backgroundColor: theme.primary || '#f5a623' }]} />
+                  )}
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        )}
       </View>
 
-      {/* Talent Cards Feed */}
-      <FlatList
-        data={filteredList}
-        keyExtractor={(item) => item.id}
-        renderItem={({ item }) => (
-          <TalentCard
-            talent={{
-              id: item.id,
-              name: item.fullName || item.displayName || 'Filmmaker',
-              username: item.username || 'crew',
-              role: item.role || item.roles?.[0] || 'Filmmaker',
-              category: item.category,
-              department: item.department,
-              isActor: item.isActor,
-              ageRange: item.ageRange,
-              location: item.location || item.city || 'Available Worldwide',
-              languages: item.languages || [],
-              unionStatus: item.unionStatus || 'Non-Union',
-              availability: item.availability || {
-                status: item.isAvailable !== false ? 'AVAILABLE' : 'BUSY',
-              },
-              representation: item.representation || { isRepresented: false },
-              bio: item.bio || '',
-              gearPackage: item.equipment?.[0] || null,
-              avatar: item.photoURL,
-            }}
-            onPressProfile={() => setSelectedFilmmaker(item)}
-            onViewReel={() => setSelectedFilmmaker(item)}
-            onInquire={() => setSelectedFilmmaker(item)}
-          />
-        )}
-        contentContainerStyle={{ padding: 16, paddingBottom: 100 }}
-        onEndReached={fetchNextPage}
-        onEndReachedThreshold={0.5}
-        ListFooterComponent={
-          loading ? (
-            <ActivityIndicator color={theme.primary} style={{ marginVertical: 20 }} />
-          ) : !hasMore && filteredList.length > 0 ? (
-            <Text style={[styles.endText, { color: theme.textMuted }]}>
-              All verified filmmakers loaded
-            </Text>
-          ) : null
-        }
-        ListEmptyComponent={
-          !loading ? (
-            <View style={styles.emptyContainer}>
-              <Text style={[styles.emptyIcon, { color: theme.textMuted }]}>🧭</Text>
-              <Text style={[styles.emptyTitle, { color: theme.text }]}>No filmmakers found</Text>
-              <Text style={[styles.emptySub, { color: theme.textSecondary }]}>
-                {searchQuery || isFiltered
-                  ? 'Try adjusting your search or active filters.'
-                  : 'The directory is starting fresh. As filmmakers join FilmRoom, they will be listed here.'}
+      {/* Main Tab Content */}
+      {activeTab === 'FILMMAKERS' ? (
+        <FlatList
+          data={filteredTalents}
+          keyExtractor={(item) => item.id}
+          renderItem={({ item }) => (
+            <TalentCard
+              talent={{
+                id: item.id,
+                name: item.fullName || item.displayName || 'Filmmaker',
+                username: item.username || 'crew',
+                role: item.primaryRole || item.role || item.roles?.[0] || 'Filmmaker',
+                filmRoomId: item.filmRoomId,
+                category: item.category,
+                department: item.department,
+                isActor: item.isActor,
+                ageRange: item.ageRange,
+                location: item.location || item.city || 'Available Worldwide',
+                languages: item.languages || [],
+                unionStatus: item.unionStatus || 'Non-Union',
+                availability: item.availability || {
+                  status: item.isAvailable !== false ? 'AVAILABLE' : 'BUSY',
+                },
+                representation: item.representation || { isRepresented: false },
+                bio: item.bio || '',
+                gearPackage: item.equipment?.[0] || null,
+                avatar: item.photoURL,
+              }}
+              onPressProfile={() => handleOpenFilmmaker(item)}
+              onViewReel={() => {
+                handleOpenFilmmaker(item);
+                setDetailedFilmmaker(item);
+              }}
+              onInquire={() => handleOpenFilmmaker(item)}
+            />
+          )}
+          contentContainerStyle={{ padding: 16, paddingBottom: 100 }}
+          onEndReached={fetchNextTalentsPage}
+          onEndReachedThreshold={0.5}
+          ListFooterComponent={
+            loadingTalents ? (
+              <ActivityIndicator color={theme.primary || '#f5a623'} style={{ marginVertical: 20 }} />
+            ) : !hasMoreTalents && filteredTalents.length > 0 ? (
+              <Text style={[styles.endText, { color: theme.textMuted || '#64748b' }]}>
+                All verified filmmakers loaded
               </Text>
+            ) : null
+          }
+          ListEmptyComponent={
+            !loadingTalents ? (
+              <View style={styles.emptyContainer}>
+                <Text style={[styles.emptyIcon, { color: theme.textMuted || '#64748b' }]}>🧭</Text>
+                <Text style={[styles.emptyTitle, { color: theme.text || '#ffffff' }]}>No filmmakers found</Text>
+                <Text style={[styles.emptySub, { color: theme.textSecondary || '#9ca3af' }]}>
+                  {searchQuery || isFiltered
+                    ? 'Try adjusting your search criteria or clearing filters.'
+                    : 'The directory is starting fresh. As filmmakers join FilmRoom, they will appear here.'}
+                </Text>
+              </View>
+            ) : null
+          }
+        />
+      ) : activeTab === 'CALLS' ? (
+        <FlatList
+          data={filteredCalls}
+          keyExtractor={(item) => item.id}
+          renderItem={({ item }) => (
+            <ProductionCallCard
+              project={item}
+              onExpressInterest={() => handleApplyCall(item)}
+              onApply={() => handleApplyCall(item)}
+              onEditCall={() => setCallToEdit(item)}
+            />
+          )}
+          contentContainerStyle={{ padding: 16, paddingBottom: 100 }}
+          ListFooterComponent={
+            loadingCalls ? (
+              <ActivityIndicator color={theme.primary || '#f5a623'} style={{ marginVertical: 20 }} />
+            ) : null
+          }
+          ListEmptyComponent={
+            !loadingCalls ? (
+              <View style={styles.emptyContainer}>
+                <Text style={[styles.emptyIcon, { color: theme.textMuted || '#64748b' }]}>📢</Text>
+                <Text style={[styles.emptyTitle, { color: theme.text || '#ffffff' }]}>No Open Calls Found</Text>
+                <Text style={[styles.emptySub, { color: theme.textSecondary || '#9ca3af' }]}>
+                  {searchQuery
+                    ? 'No production calls matched your search query.'
+                    : 'No public crew calls have been posted to The Board yet.'}
+                </Text>
+              </View>
+            ) : null
+          }
+        />
+      ) : (
+        <FlatList
+          data={filteredRooms}
+          keyExtractor={(item) => item.id}
+          renderItem={({ item }) => (
+            <View
+              style={[
+                styles.roomCard,
+                {
+                  backgroundColor: theme.card || '#181b1f',
+                  borderColor: theme.cardBorder || '#242830',
+                },
+              ]}
+            >
+              <View style={styles.roomHeader}>
+                <View style={{ flex: 1, marginRight: 8 }}>
+                  <Text style={[styles.roomTitle, { color: theme.primary || '#f5a623' }]}>
+                    {item.title}
+                  </Text>
+                  <Text style={[styles.roomMeta, { color: theme.textSecondary || '#9ca3af' }]}>
+                    {item.projectType || 'Film'} • {Object.keys(item.members || {}).length} Crew Active
+                  </Text>
+                </View>
+                <View style={[styles.stageBadge, { backgroundColor: '#1e3d29' }]}>
+                  <Text style={styles.stageBadgeText}>
+                    Stage {(item.currentStage || 0) + 1}
+                  </Text>
+                </View>
+              </View>
+
+              <Text style={[styles.roomLogline, { color: theme.text || '#ffffff' }]} numberOfLines={3}>
+                {item.logline || 'Production underway.'}
+              </Text>
+
+              {item.crewRequirements && item.crewRequirements.length > 0 && (
+                <View style={styles.neededRolesBox}>
+                  <Text style={[styles.neededLabel, { color: theme.textSecondary || '#9ca3af' }]}>
+                    LOOKING FOR CREW:
+                  </Text>
+                  <View style={styles.neededTagsWrap}>
+                    {item.crewRequirements.map((req, idx) => (
+                      <View key={idx} style={[styles.neededPill, { backgroundColor: '#242830' }]}>
+                        <Text style={[styles.neededPillText, { color: theme.text || '#ffffff' }]}>
+                          {req.role} ({req.quantity || 1})
+                        </Text>
+                      </View>
+                    ))}
+                  </View>
+                </View>
+              )}
+
+              <TouchableOpacity
+                style={[styles.enterSlateBtn, { backgroundColor: theme.surface || '#121417', borderColor: theme.cardBorder || '#242830' }]}
+                onPress={() => {
+                  switchRoom(item.id);
+                  navigation.navigate('TheBoardTab', {
+                    screen: 'StagePipeline',
+                    params: { screen: 'Stage1_Ideation' },
+                  });
+                }}
+                activeOpacity={0.8}
+              >
+                <Text style={[styles.enterSlateText, { color: theme.primary || '#f5a623' }]}>
+                  Observe Production Slate & Pipeline ➔
+                </Text>
+              </TouchableOpacity>
             </View>
-          ) : null
-        }
-      />
+          )}
+          contentContainerStyle={{ padding: 16, paddingBottom: 100 }}
+          ListFooterComponent={
+            loadingRooms ? (
+              <ActivityIndicator color={theme.primary || '#f5a623'} style={{ marginVertical: 20 }} />
+            ) : null
+          }
+          ListEmptyComponent={
+            !loadingRooms ? (
+              <View style={styles.emptyContainer}>
+                <Text style={[styles.emptyIcon, { color: theme.textMuted || '#64748b' }]}>🎬</Text>
+                <Text style={[styles.emptyTitle, { color: theme.text || '#ffffff' }]}>No Public Rooms</Text>
+                <Text style={[styles.emptySub, { color: theme.textSecondary || '#9ca3af' }]}>
+                  {searchQuery
+                    ? 'No public production rooms match your search query.'
+                    : 'There are currently no public production rooms listed. Check back as new films are launched.'}
+                </Text>
+              </View>
+            ) : null
+          }
+        />
+      )}
 
       {/* Filter Modal */}
       <FilterModal
@@ -328,40 +935,55 @@ export default function ExploreDirectoryScreen({ navigation }) {
         onApply={(filters) => setActiveFilters(filters)}
       />
 
-      {/* Filmmaker Details Sheet */}
+      {/* Quick Profile Preview Modal */}
+      <QuickProfileModal
+        visible={!!quickProfileUser}
+        filmmaker={quickProfileUser}
+        onClose={() => setQuickProfileUser(null)}
+        onViewFullProfile={() => {
+          const user = quickProfileUser;
+          setQuickProfileUser(null);
+          setDetailedFilmmaker(user);
+        }}
+      />
+
+      {/* Full Filmmaker Details Modal */}
       <FilmmakerDetailModal
-        visible={!!selectedFilmmaker}
+        visible={!!detailedFilmmaker}
         filmmaker={
-          selectedFilmmaker
+          detailedFilmmaker
             ? {
-                id: selectedFilmmaker.id,
-                name: selectedFilmmaker.fullName || selectedFilmmaker.displayName || 'Filmmaker',
-                username: selectedFilmmaker.username || 'crew',
-                role: selectedFilmmaker.role || selectedFilmmaker.roles?.[0] || 'Filmmaker',
-                category: selectedFilmmaker.category,
-                department: selectedFilmmaker.department,
-                isActor: selectedFilmmaker.isActor,
-                ageRange: selectedFilmmaker.ageRange,
-                location: selectedFilmmaker.location || selectedFilmmaker.city || 'Available Worldwide',
-                languages: selectedFilmmaker.languages || [],
-                unionStatus: selectedFilmmaker.unionStatus || 'Non-Union',
-                availability: selectedFilmmaker.availability || {
-                  status: selectedFilmmaker.isAvailable !== false ? 'AVAILABLE' : 'BUSY',
+                id: detailedFilmmaker.id,
+                name: detailedFilmmaker.fullName || detailedFilmmaker.displayName || 'Filmmaker',
+                username: detailedFilmmaker.username || 'crew',
+                filmRoomId: detailedFilmmaker.filmRoomId,
+                role: detailedFilmmaker.primaryRole || detailedFilmmaker.role || detailedFilmmaker.roles?.[0] || 'Filmmaker',
+                primaryRole: detailedFilmmaker.primaryRole,
+                secondaryRoles: detailedFilmmaker.secondaryRoles,
+                category: detailedFilmmaker.category,
+                department: detailedFilmmaker.department,
+                isActor: detailedFilmmaker.isActor,
+                ageRange: detailedFilmmaker.ageRange,
+                location: detailedFilmmaker.location || detailedFilmmaker.city || 'Available Worldwide',
+                languages: detailedFilmmaker.languages || [],
+                unionStatus: detailedFilmmaker.unionStatus || 'Non-Union',
+                availability: detailedFilmmaker.availability || {
+                  status: detailedFilmmaker.isAvailable !== false ? 'AVAILABLE' : 'BUSY',
                 },
-                representation: selectedFilmmaker.representation || { isRepresented: false },
-                bio: selectedFilmmaker.bio,
-                avatar: selectedFilmmaker.photoURL,
-                dayRate: selectedFilmmaker.dayRate,
-                showreelUrl: selectedFilmmaker.showreelUrl,
-                equipment: selectedFilmmaker.equipment || [],
-                credits: selectedFilmmaker.credits || [],
+                representation: detailedFilmmaker.representation || { isRepresented: false },
+                bio: detailedFilmmaker.bio,
+                avatar: detailedFilmmaker.photoURL,
+                dayRate: detailedFilmmaker.dayRate,
+                showreelUrl: detailedFilmmaker.showreelUrl,
+                equipment: detailedFilmmaker.equipment || [],
+                credits: detailedFilmmaker.credits || [],
               }
             : null
         }
-        onClose={() => setSelectedFilmmaker(null)}
+        onClose={() => setDetailedFilmmaker(null)}
         onSendPitch={() => {
-          const peer = selectedFilmmaker;
-          setSelectedFilmmaker(null);
+          const peer = detailedFilmmaker;
+          setDetailedFilmmaker(null);
           navigation.navigate('RequestsTab', {
             screen: 'DirectMessage',
             params: {
@@ -370,12 +992,102 @@ export default function ExploreDirectoryScreen({ navigation }) {
                 fullName: peer.fullName || peer.displayName || 'Filmmaker',
                 username: peer.username,
                 photoURL: peer.photoURL || null,
-                role: peer.role || peer.roles?.[0] || 'Filmmaker',
+                role: peer.primaryRole || peer.role || peer.roles?.[0] || 'Filmmaker',
               },
             },
           });
         }}
       />
+
+      {/* Role Selection Pop-up when applying for a specified call */}
+      <ApplyRoleModal
+        visible={applyRoleModalVisible}
+        call={selectedCall}
+        onClose={() => {
+          setApplyRoleModalVisible(false);
+        }}
+        onSelectRole={(roleName) => {
+          setApplyRoleModalVisible(false);
+          setAppliedRole(roleName);
+          setSubmitReelVisible(true);
+        }}
+      />
+
+      {/* Crew Call Submission Modal */}
+      {selectedCall && (
+        <SubmitReelModal
+          visible={submitReelVisible}
+          targetLead={{
+            uid: selectedCall.createdBy,
+            name: selectedCall.director || 'Production Lead',
+            role: 'Director / Production Lead',
+            category: 'PRODUCTION',
+          }}
+          initialProject={selectedCall.title}
+          initialRole={appliedRole || selectedCall.neededRoles?.[0] || ''}
+          callData={selectedCall}
+          onClose={() => {
+            setSubmitReelVisible(false);
+            setSelectedCall(null);
+            setAppliedRole('');
+          }}
+          onSuccess={() => {
+            setSubmitReelVisible(false);
+            setSelectedCall(null);
+            setAppliedRole('');
+          }}
+        />
+      )}
+
+      {/* Modal to Edit Crew Call on The Board */}
+      <PostProductionCallModal
+        visible={!!callToEdit}
+        callToEdit={callToEdit}
+        onClose={() => setCallToEdit(null)}
+        onPublished={() => setCallToEdit(null)}
+      />
+
+      {/* Save Search Modal */}
+      <Modal visible={saveSearchModalVisible} transparent animationType="fade">
+        <View style={styles.modalBackdrop}>
+          <View style={[styles.saveModalCard, { backgroundColor: theme.card || '#181b1f', borderColor: theme.cardBorder || '#242830' }]}>
+            <Text style={[styles.saveModalTitle, { color: theme.text || '#ffffff' }]}>
+              Save Search Filter
+            </Text>
+            <Text style={[styles.saveModalSub, { color: theme.textSecondary || '#9ca3af' }]}>
+              Give this search a name to run it anytime in one tap.
+            </Text>
+
+            <TextInput
+              style={[styles.saveInput, { color: theme.text || '#ffffff', borderColor: theme.cardBorder || '#242830' }]}
+              placeholder="e.g. NYC Cinematographers"
+              placeholderTextColor={theme.textMuted || '#64748b'}
+              value={newSearchTitle}
+              onChangeText={setNewSearchTitle}
+              autoFocus
+            />
+
+            <View style={styles.saveModalActions}>
+              <TouchableOpacity
+                style={[styles.saveCancelBtn, { borderColor: theme.cardBorder || '#242830' }]}
+                onPress={() => {
+                  setSaveSearchModalVisible(false);
+                  setNewSearchTitle('');
+                }}
+              >
+                <Text style={{ color: theme.textSecondary || '#9ca3af', fontWeight: '700' }}>Cancel</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.saveConfirmBtn, { backgroundColor: theme.primary || '#f5a623' }]}
+                onPress={handleSaveCurrentSearch}
+              >
+                <Text style={styles.saveConfirmBtnText}>Save</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       {/* In-App Notification Center */}
       <NotificationCenterModal
@@ -392,11 +1104,25 @@ const styles = StyleSheet.create({
   header: {
     paddingHorizontal: 16,
     paddingTop: 44,
-    paddingBottom: 10,
+    paddingBottom: 8,
     borderBottomWidth: 1,
   },
-  headerTitleRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  bellBtn: {
+  headerTopRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  headerTitle: {
+    fontSize: 20,
+    fontWeight: '900',
+    letterSpacing: 1.2,
+  },
+  headerRightActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  iconBtn: {
     paddingHorizontal: 8,
     paddingVertical: 6,
     borderRadius: 8,
@@ -421,8 +1147,7 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '800',
   },
-  mainTitle: { fontSize: 20, fontWeight: '900', letterSpacing: 1.2 },
-  filterIconBtn: {
+  filterBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
@@ -432,7 +1157,10 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     position: 'relative',
   },
-  filterBtnText: { fontSize: 12, fontWeight: '800' },
+  filterBtnText: {
+    fontSize: 12,
+    fontWeight: '800',
+  },
   activeDot: {
     width: 6,
     height: 6,
@@ -441,13 +1169,137 @@ const styles = StyleSheet.create({
     top: 4,
     right: 4,
   },
-  sub: { fontSize: 11, marginTop: 4 },
-  searchBox: { marginTop: 10, borderRadius: 8, borderWidth: 1, paddingHorizontal: 12, paddingVertical: 7 },
-  searchInput: { fontSize: 13 },
-  endText: { textAlign: 'center', marginVertical: 20, fontSize: 11, fontStyle: 'italic' },
+  tabBar: {
+    flexDirection: 'row',
+    marginTop: 12,
+    borderBottomWidth: 1,
+    borderColor: '#222222',
+  },
+  tabItem: {
+    paddingVertical: 8,
+    marginRight: 16,
+  },
+  tabText: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  searchBox: {
+    marginTop: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 13,
+    padding: 0,
+  },
+  filterAssistContainer: {
+    marginTop: 6,
+  },
+  chipsScroll: {
+    flexDirection: 'row',
+    gap: 6,
+    paddingVertical: 4,
+  },
+  filterChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 4,
+  },
+  filterChipText: {
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  chipRemove: {
+    color: '#9ca3af',
+    fontSize: 10,
+  },
+  recentHistoryContainer: {
+    marginTop: 6,
+  },
+  historyHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+  historySectionTitle: {
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+  },
+  historyAndFilterRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  historyPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    borderRadius: 6,
+    borderWidth: 1,
+    maxWidth: 130,
+  },
+  historyPillText: {
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  filterBtnInline: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 6,
+    borderWidth: 1,
+  },
+  savedSearchesRow: {
+    marginTop: 4,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  saveBtn: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 4,
+    borderWidth: 1,
+    borderStyle: 'dashed',
+  },
+  saveBtnText: {
+    fontSize: 10,
+    fontWeight: '800',
+  },
+  savedSearchPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 4,
+    borderWidth: 1,
+  },
+  savedSearchPillText: {
+    fontSize: 10,
+    fontWeight: '600',
+  },
+  endText: {
+    textAlign: 'center',
+    marginVertical: 20,
+    fontSize: 11,
+    fontStyle: 'italic',
+  },
   emptyContainer: {
     alignItems: 'center',
-    marginTop: 100,
+    marginTop: 80,
     paddingHorizontal: 32,
   },
   emptyIcon: {
@@ -464,5 +1316,127 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginTop: 6,
     lineHeight: 18,
+  },
+  roomCard: {
+    padding: 16,
+    borderRadius: 10,
+    borderWidth: 1,
+    marginBottom: 12,
+  },
+  roomHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+  },
+  roomTitle: {
+    fontSize: 16,
+    fontWeight: '900',
+  },
+  roomMeta: {
+    fontSize: 11,
+    marginTop: 2,
+  },
+  stageBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 4,
+  },
+  stageBadgeText: {
+    color: '#4ade80',
+    fontSize: 10,
+    fontWeight: '800',
+  },
+  roomLogline: {
+    fontSize: 13,
+    lineHeight: 18,
+    marginTop: 8,
+  },
+  neededRolesBox: {
+    marginTop: 10,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderColor: '#242830',
+  },
+  neededLabel: {
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+  },
+  neededTagsWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginTop: 4,
+  },
+  neededPill: {
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  neededPillText: {
+    fontSize: 10,
+    fontWeight: '600',
+  },
+  enterSlateBtn: {
+    marginTop: 12,
+    paddingVertical: 8,
+    borderRadius: 6,
+    borderWidth: 1,
+    alignItems: 'center',
+  },
+  enterSlateText: {
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  saveModalCard: {
+    width: '100%',
+    borderRadius: 12,
+    borderWidth: 1,
+    padding: 20,
+  },
+  saveModalTitle: {
+    fontSize: 16,
+    fontWeight: '900',
+  },
+  saveModalSub: {
+    fontSize: 12,
+    marginTop: 4,
+  },
+  saveInput: {
+    marginTop: 14,
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    fontSize: 14,
+  },
+  saveModalActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 10,
+    marginTop: 16,
+  },
+  saveCancelBtn: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 6,
+    borderWidth: 1,
+  },
+  saveConfirmBtn: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 6,
+  },
+  saveConfirmBtnText: {
+    color: '#000000',
+    fontWeight: '800',
+    fontSize: 13,
   },
 });

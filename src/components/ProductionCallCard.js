@@ -3,22 +3,39 @@ import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
 
-export default function ProductionCallCard({ project, onExpressInterest, onViewLead, onEditCall }) {
+export default function ProductionCallCard({ project, onExpressInterest, onApply, onViewLead, onEditCall }) {
   const { theme } = useTheme();
   const { currentUser } = useAuth();
   const [showRequirements, setShowRequirements] = useState(false);
 
   const isOwner = currentUser?.uid && project.createdBy === currentUser.uid;
   const hasDetailedPositions = project.crewPositions && project.crewPositions.length > 0;
+  const isCasting = project.postType === 'CASTING_CALL';
+  const hasScriptSides = project.hasDraftScript || !!project.draftScriptUrl || !!project.scriptSidesUrl;
+  const handleApplyPress = onApply || onExpressInterest;
 
   return (
     <View style={[styles.card, { backgroundColor: theme.card || '#181b1f', borderColor: theme.cardBorder || '#242830' }]}>
       {/* Top Header */}
       <View style={styles.topRow}>
         <View style={styles.badgeGroup}>
-          <View style={styles.stageTag}>
-            <Text style={styles.stageText}>{project.stage || 'PRE-PROD'}</Text>
-          </View>
+          {isCasting ? (
+            <View style={styles.castingTag}>
+              <Text style={styles.castingTagText}>🎭 CASTING CALL</Text>
+            </View>
+          ) : (
+            <View style={styles.stageTag}>
+              <Text style={styles.stageText}>{project.stage || 'PRE-PROD'}</Text>
+            </View>
+          )}
+          {project.rolePosition && (
+            <View style={styles.rolePositionTag}>
+              <Text style={styles.rolePositionText}>
+                {project.rolePosition.includes('Lead') ? '👑 ' : project.rolePosition.includes('Antagonist') ? '⚡ ' : '👤 '}
+                {project.rolePosition}
+              </Text>
+            </View>
+          )}
           {project.acceptRemote && (
             <View style={styles.remoteTag}>
               <Text style={styles.remoteText}>🌐 Remote Eligible</Text>
@@ -37,19 +54,51 @@ export default function ProductionCallCard({ project, onExpressInterest, onViewL
         Lead: {project.director || 'Production Lead'} • 📍 {project.location || 'Location Pending'}
       </Text>
 
-      {/* Synopsis / Logline */}
+      {/* Casting Specific: Character Name & Gender Demographics */}
+      {isCasting && (
+        <View style={styles.castingMetaRow}>
+          {project.characterName && (
+            <View style={styles.charBadge}>
+              <Text style={styles.charBadgeLabel}>ROLE / CHARACTER:</Text>
+              <Text style={[styles.charBadgeValue, { color: theme.text || '#ffffff' }]}>
+                {project.characterName}
+              </Text>
+            </View>
+          )}
+          {project.genderPreference && (
+            <View style={[styles.genderChip, { backgroundColor: theme.surface || '#121417', borderColor: theme.cardBorder || '#242830' }]}>
+              <Text style={[styles.genderChipText, { color: theme.textSecondary || '#9ca3af' }]}>
+                👤 {project.genderPreference}
+              </Text>
+            </View>
+          )}
+        </View>
+      )}
+
+      {/* Synopsis / Character Breakdown / Logline */}
       <Text style={[styles.logline, { color: theme.text || '#ffffff' }]} numberOfLines={3}>
-        {project.logline}
+        {project.characterDescription || project.logline || project.description}
       </Text>
 
-      {/* Needed Roles Chips */}
-      <View style={styles.rolesRow}>
-        {project.neededRoles?.map((r, i) => (
-          <View key={i} style={[styles.roleChip, { backgroundColor: theme.surface || '#121417', borderColor: theme.cardBorder || '#242830' }]}>
-            <Text style={[styles.roleChipText, { color: theme.text || '#ffffff' }]}>{r}</Text>
-          </View>
-        ))}
-      </View>
+      {/* Script Sides Locked Indicator */}
+      {isCasting && hasScriptSides && (
+        <View style={[styles.scriptSidesBadge, { backgroundColor: theme.surface || '#121417', borderColor: theme.cardBorder || '#242830' }]}>
+          <Text style={styles.scriptSidesText}>
+            🔒 Draft Script / Sides Attached • Unlocked upon director confirmation
+          </Text>
+        </View>
+      )}
+
+      {/* Needed Roles Chips (Non-casting or supplemental) */}
+      {!isCasting && project.neededRoles && project.neededRoles.length > 0 && (
+        <View style={styles.rolesRow}>
+          {project.neededRoles.map((r, i) => (
+            <View key={i} style={[styles.roleChip, { backgroundColor: theme.surface || '#121417', borderColor: theme.cardBorder || '#242830' }]}>
+              <Text style={[styles.roleChipText, { color: theme.text || '#ffffff' }]}>{r}</Text>
+            </View>
+          ))}
+        </View>
+      )}
 
       {/* Detailed Requirements (Expandable) */}
       {hasDetailedPositions && showRequirements && (
@@ -81,7 +130,7 @@ export default function ProductionCallCard({ project, onExpressInterest, onViewL
 
       {/* Dates & Schedule */}
       <Text style={[styles.schedule, { color: theme.textMuted || '#64748b' }]}>
-        📅 Shoot Window: {project.dates || 'TBD'} • 👥 Status: Accepting Submissions
+        📅 {isCasting ? 'Auditions / Shoot: ' : 'Shoot Window: '}{project.dates || 'TBD'} • 👥 Status: Accepting Submissions
       </Text>
 
       {/* Action Buttons */}
@@ -120,9 +169,11 @@ export default function ProductionCallCard({ project, onExpressInterest, onViewL
         ) : (
           <TouchableOpacity
             style={[styles.expressBtn, { backgroundColor: theme.primary || '#f5a623' }]}
-            onPress={onExpressInterest}
+            onPress={handleApplyPress}
           >
-            <Text style={styles.expressText}>Submit Interest / Reel ➔</Text>
+            <Text style={styles.expressText}>
+              {isCasting ? '🎭 Apply ➔' : 'Apply ➔'}
+            </Text>
           </TouchableOpacity>
         )}
       </View>
@@ -160,6 +211,83 @@ const styles = StyleSheet.create({
     color: '#cbd5e1',
     fontSize: 10,
     fontWeight: 'bold',
+  },
+  castingTag: {
+    backgroundColor: '#281a3d',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: '#7c3aed',
+  },
+  castingTagText: {
+    color: '#c084fc',
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+  },
+  rolePositionTag: {
+    backgroundColor: '#1e2430',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: '#3b82f6',
+  },
+  rolePositionText: {
+    color: '#93c5fd',
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  castingMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginVertical: 4,
+  },
+  charBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 4,
+    backgroundColor: '#1f1b13',
+    borderWidth: 1,
+    borderColor: '#d97706',
+  },
+  charBadgeLabel: {
+    color: '#f59e0b',
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 0.5,
+  },
+  charBadgeValue: {
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  genderChip: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 4,
+    borderWidth: 1,
+  },
+  genderChipText: {
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  scriptSidesBadge: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 6,
+    borderWidth: 1,
+    marginVertical: 4,
+  },
+  scriptSidesText: {
+    color: '#fbbf24',
+    fontSize: 11,
+    fontWeight: '700',
   },
   remoteTag: {
     backgroundColor: '#162b20',

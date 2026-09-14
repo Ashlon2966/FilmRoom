@@ -12,6 +12,7 @@ import {
   Modal,
   Pressable,
   ActivityIndicator,
+  Image,
 } from 'react-native';
 import {
   collection,
@@ -54,7 +55,9 @@ export default function DirectMessageScreen({ route, navigation }) {
         : `${peerId}_${currentUser.uid}`
       : null;
 
-  // Blocked status check (bilateral)
+  const [livePeer, setLivePeer] = useState(peerUser || null);
+
+  // Blocked status check (bilateral) & live peer sync
   const isBlockedByMe = (userProfile?.blockedUids || []).includes(peerId);
   const [isBlockedByPeer, setIsBlockedByPeer] = useState(false);
 
@@ -64,6 +67,7 @@ export default function DirectMessageScreen({ route, navigation }) {
       if (snap.exists()) {
         const data = snap.data();
         setIsBlockedByPeer((data.blockedUids || []).includes(currentUser.uid));
+        setLivePeer((prev) => ({ ...prev, ...data }));
       }
     });
     return () => unsub();
@@ -267,12 +271,25 @@ export default function DirectMessageScreen({ route, navigation }) {
       >
         <View style={styles.headerLeft}>
           <BackButton />
+          <View style={[styles.headerAvatarBox, { backgroundColor: theme.surface, borderColor: theme.primary + '44' }]}>
+            {(livePeer?.photoURL || livePeer?.avatar || peerUser?.photoURL || peerUser?.avatar) ? (
+              <Image
+                source={{ uri: livePeer?.photoURL || livePeer?.avatar || peerUser?.photoURL || peerUser?.avatar }}
+                style={styles.headerAvatarImg}
+                resizeMode="cover"
+              />
+            ) : (
+              <Text style={[styles.headerAvatarInitial, { color: theme.primary }]}>
+                {(livePeer?.fullName || livePeer?.name || peerUser?.fullName || peerUser?.name || 'F')[0].toUpperCase()}
+              </Text>
+            )}
+          </View>
           <View style={styles.headerInfo}>
             <Text style={[styles.peerName, { color: theme.text }]} numberOfLines={1}>
-              {peerUser?.fullName || peerUser?.name || 'Filmmaker'}
+              {livePeer?.fullName || livePeer?.name || peerUser?.fullName || peerUser?.name || 'Filmmaker'}
             </Text>
             <Text style={[styles.peerUsername, { color: theme.textSecondary }]} numberOfLines={1}>
-              @{peerUser?.username || 'crew'}
+              @{livePeer?.username || peerUser?.username || 'crew'}
             </Text>
           </View>
         </View>
@@ -470,6 +487,24 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     flex: 1,
+  },
+  headerAvatarBox: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    borderWidth: 1,
+    overflow: 'hidden',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginLeft: 6,
+  },
+  headerAvatarImg: {
+    width: '100%',
+    height: '100%',
+  },
+  headerAvatarInitial: {
+    fontSize: 14,
+    fontWeight: '900',
   },
   headerInfo: {
     flex: 1,

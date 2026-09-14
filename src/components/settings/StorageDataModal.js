@@ -14,13 +14,17 @@ import {
 import { useTheme } from '../../context/ThemeContext';
 import {
   CLOUDINARY_CONFIG,
+  resolveCloudinaryConfig,
   getCloudinaryStatus,
   setCustomCloudinaryConfig,
   resetCustomCloudinaryConfig,
   initCloudinaryConfig,
+  isPlaceholderValue,
 } from '../../config/cloudinaryConfig';
+import { testCloudinaryConnection } from '../../services/cloudinaryService';
 import { getLocalDatabaseStats, clearLocalCache } from '../../services/localDatabaseService';
 import { getPendingQueueCount } from '../../services/syncService';
+import { useToast } from '../../context/ToastContext';
 
 const DEFAULT_STORAGE_PREFS = {
   autoPurgeCache: false,
@@ -30,6 +34,7 @@ const DEFAULT_STORAGE_PREFS = {
 
 export default function StorageDataModal({ visible, onClose }) {
   const { theme } = useTheme();
+  const { showToast } = useToast();
 
   const [cacheSize, setCacheSize] = useState('0 KB');
   const [dbStats, setDbStats] = useState({
@@ -45,7 +50,9 @@ export default function StorageDataModal({ visible, onClose }) {
   const [cloudName, setCloudName] = useState('');
   const [uploadPreset, setUploadPreset] = useState('');
   const [isCloudinaryConfigured, setIsCloudinaryConfigured] = useState(false);
-  const [testingCloudinary, setTestingCloudinary] = useState(false);
+  const [activeConfig, setActiveConfig] = useState(null);
+  const [savingCloudinary, setSavingCloudinary] = useState(false);
+  const [testingConnection, setTestingConnection] = useState(false);
 
   // Storage preferences draft staging
   const [savedPrefs, setSavedPrefs] = useState(DEFAULT_STORAGE_PREFS);
@@ -60,11 +67,18 @@ export default function StorageDataModal({ visible, onClose }) {
 
   useEffect(() => {
     if (visible) {
-      initCloudinaryConfig().then(() => {
-        const status = getCloudinaryStatus();
-        setCloudName(status.cloudName);
-        setUploadPreset(status.uploadPreset);
-        setIsCloudinaryConfigured(status.isConfigured);
+      initCloudinaryConfig().then((resolved) => {
+        if (resolved.configured) {
+          setCloudName(resolved.cloudName || '');
+          setUploadPreset(resolved.uploadPreset || '');
+          setIsCloudinaryConfigured(true);
+          setActiveConfig(resolved);
+        } else {
+          setCloudName('');
+          setUploadPreset('');
+          setIsCloudinaryConfigured(false);
+          setActiveConfig(null);
+        }
       });
       refreshStats();
       setDraftPrefs(savedPrefs);
@@ -83,7 +97,7 @@ export default function StorageDataModal({ visible, onClose }) {
           onPress: async () => {
             await clearLocalCache();
             await refreshStats();
-            Alert.alert('✓ Cache Cleared', 'Temporary cached data has been cleared.');
+            showToast({ type: 'info', message: 'Temporary cache cleared' });
           },
         },
       ]
@@ -91,43 +105,93 @@ export default function StorageDataModal({ visible, onClose }) {
   };
 
   const handleSaveCloudinary = async () => {
-    if (!cloudName.trim() || !uploadPreset.trim()) {
-      Alert.alert('Missing Fields', 'Please provide both your Cloudinary Cloud Name and Unsigned Upload Preset.');
+    const trimmedCloud = cloudName.trim();
+    const trimmedPreset = uploadPreset.trim();
+
+    if (!trimmedCloud || !trimmedPreset) {
+      Alert.alert(
+        'Missing Information',
+        'Please enter both your Cloud Name and Unsigned Upload Preset.'
+      );
       return;
     }
 
-    setTestingCloudinary(true);
-    try {
-      await setCustomCloudinaryConfig(cloudName.trim(), uploadPreset.trim());
-      const status = getCloudinaryStatus();
-      setIsCloudinaryConfigured(status.isConfigured);
+    if (isPlaceholderValue(trimmedCloud) || isPlaceholderValue(trimmedPreset)) {
       Alert.alert(
-        '✓ Cloudinary Saved',
-        `Cloudinary credentials saved to local configuration.\n\nCloud Name: ${cloudName.trim()}\nPreset: ${uploadPreset.trim()}`
+        'Invalid Credentials',
+        'Please enter your actual Cloudinary credentials. Placeholder values like "filmroom_media" cannot be saved.'
       );
+      return;
+    }
+
+    setSavingCloudinary(true);
+    try {
+      const resolved = await setCustomCloudinaryConfig(trimmedCloud, trimmedPreset);
+      setIsCloudinaryConfigured(resolved.configured);
+      setActiveConfig(resolved);
+      showToast({ type: 'success', message: 'Cloudinary configuration saved' });
     } catch (e) {
-      Alert.alert('Error', 'Failed to save configuration.');
+      showToast({ type: 'error', message: e.message || 'Failed to save configuration.' });
     } finally {
-      setTestingCloudinary(false);
+      setSavingCloudinary(false);
+    }
+  };
+
+  const handleTestConnection = async () => {
+    const targetCloud = cloudName.trim();
+    const targetPreset = uploadPreset.trim();
+
+    if (!targetCloud || !targetPreset) {
+      Alert.alert(
+        'Credentials Required',
+        'Please enter your Cloud Name and Unsigned Upload Preset to test connection.'
+      );
+      return;
+    }
+
+    if (isPlaceholderValue(targetCloud) || isPlaceholderValue(targetPreset)) {
+      Alert.alert(
+        'Invalid Credentials',
+        'Placeholder values cannot be tested. Enter your actual Cloudinary credentials.'
+      );
+      return;
+    }
+
+    setTestingConnection(true);
+    try {
+      const result = await testCloudinaryConnection({
+        cloudName: targetCloud,
+        uploadPreset: targetPreset,
+      });
+
+      if (result.success) {
+        showToast({ type: 'success', message: result.message });
+      } else {
+        showToast({ type: 'error', message: result.message });
+      }
+    } catch (err) {
+      showToast({ type: 'error', message: err.message || 'Unable to connect to Cloudinary.' });
+    } finally {
+      setTestingConnection(false);
     }
   };
 
   const handleResetCloudinary = async () => {
     Alert.alert(
-      'Reset Cloudinary Settings',
-      'Reset Cloudinary configuration back to default .env values?',
+      'Clear Cloudinary Configuration',
+      'Remove saved Cloudinary credentials from this device? Uploads will be paused until credentials are configured again.',
       [
         { text: 'Cancel', style: 'cancel' },
         {
-          text: 'Reset',
+          text: 'Clear Configuration',
           style: 'destructive',
           onPress: async () => {
-            await resetCustomCloudinaryConfig();
-            const status = getCloudinaryStatus();
-            setCloudName(status.cloudName);
-            setUploadPreset(status.uploadPreset);
-            setIsCloudinaryConfigured(status.isConfigured);
-            Alert.alert('Reset', 'Cloudinary settings restored to default values.');
+            const resolved = await resetCustomCloudinaryConfig();
+            setCloudName(resolved.cloudName || '');
+            setUploadPreset(resolved.uploadPreset || '');
+            setIsCloudinaryConfigured(resolved.configured);
+            setActiveConfig(resolved.configured ? resolved : null);
+            showToast({ type: 'info', message: 'Cloudinary configuration removed' });
           },
         },
       ]
@@ -136,7 +200,7 @@ export default function StorageDataModal({ visible, onClose }) {
 
   const handleSaveChanges = () => {
     setSavedPrefs(draftPrefs);
-    Alert.alert('✓ Saved', 'Storage and caching preferences have been updated.');
+    showToast({ type: 'success', message: 'Storage preferences saved' });
     onClose();
   };
 
@@ -147,7 +211,7 @@ export default function StorageDataModal({ visible, onClose }) {
 
   const handleRestoreDefaults = () => {
     setDraftPrefs(DEFAULT_STORAGE_PREFS);
-    Alert.alert('Defaults Restored', 'Storage preferences reset to factory defaults.');
+    showToast({ type: 'info', message: 'Storage preferences reset to defaults' });
   };
 
   return (
@@ -207,24 +271,55 @@ export default function StorageDataModal({ visible, onClose }) {
             {/* CLOUDINARY MEDIA SETUP */}
             <View style={styles.sectionHeaderRow}>
               <Text style={[styles.sectionHeading, { color: theme.textSecondary }]}>CLOUDINARY MEDIA CONFIGURATION</Text>
-              <View style={[styles.statusBadge, { backgroundColor: isCloudinaryConfigured ? '#052e16' : '#451a03', borderColor: isCloudinaryConfigured ? '#22c55e' : '#f59e0b' }]}>
-                <Text style={[styles.statusBadgeText, { color: isCloudinaryConfigured ? '#4ade80' : '#fbbf24' }]}>
-                  {isCloudinaryConfigured ? '✓ Configured' : '⚠ Action Required'}
+              <View
+                style={[
+                  styles.statusBadge,
+                  {
+                    backgroundColor: isCloudinaryConfigured ? '#052e16' : '#2e1b05',
+                    borderColor: isCloudinaryConfigured ? '#22c55e' : '#f59e0b',
+                  },
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.statusBadgeText,
+                    { color: isCloudinaryConfigured ? '#4ade80' : '#fbbf24' },
+                  ]}
+                >
+                  {isCloudinaryConfigured ? '✓ Cloudinary Configured' : '○ Cloudinary Not Configured'}
                 </Text>
               </View>
             </View>
 
-            <View style={[styles.configCard, { backgroundColor: theme.background, borderColor: theme.cardBorder }]}>
-              <Text style={[styles.configExplainer, { color: theme.textSecondary }]}>
-                FilmRoom uses Cloudinary free tier with Unsigned Upload Presets for photos and showreels. No API secrets are exposed.
-              </Text>
+            <View style={[styles.configCard, { backgroundColor: theme.surface, borderColor: theme.cardBorder }]}>
+              {/* Safe Client Warning */}
+              <View style={[styles.securityNoticeBox, { backgroundColor: theme.background, borderColor: theme.cardBorder }]}>
+                <Text style={styles.securityNoticeIcon}>🔒</Text>
+                <Text style={[styles.securityNoticeText, { color: theme.textSecondary }]}>
+                  Cloud Name and unsigned upload preset are safe for client-side unsigned uploads. Never enter your Cloudinary API Secret here.
+                </Text>
+              </View>
 
-              <Text style={[styles.inputLabel, { color: theme.textSecondary }]}>CLOUD NAME</Text>
+              {isCloudinaryConfigured && activeConfig ? (
+                <View style={[styles.activeConfigBox, { backgroundColor: theme.background, borderColor: '#22c55e33' }]}>
+                  <Text style={[styles.activeConfigHeader, { color: '#4ade80' }]}>Active Configuration</Text>
+                  <View style={styles.activeConfigRow}>
+                    <Text style={[styles.activeConfigKey, { color: theme.textSecondary }]}>Cloud Name:</Text>
+                    <Text style={[styles.activeConfigVal, { color: theme.text }]}>{activeConfig.cloudName}</Text>
+                  </View>
+                  <View style={styles.activeConfigRow}>
+                    <Text style={[styles.activeConfigKey, { color: theme.textSecondary }]}>Upload Preset:</Text>
+                    <Text style={[styles.activeConfigVal, { color: theme.text }]}>{activeConfig.uploadPreset}</Text>
+                  </View>
+                </View>
+              ) : null}
+
+              <Text style={[styles.inputLabel, { color: theme.textSecondary, marginTop: 10 }]}>CLOUD NAME</Text>
               <TextInput
-                style={[styles.input, { backgroundColor: theme.surface, borderColor: theme.cardBorder, color: theme.text }]}
+                style={[styles.input, { backgroundColor: theme.background, borderColor: theme.cardBorder, color: theme.text }]}
                 value={cloudName}
                 onChangeText={setCloudName}
-                placeholder="e.g. filmroom_studio"
+                placeholder="e.g. your-cloud-name"
                 placeholderTextColor={theme.textMuted}
                 autoCapitalize="none"
                 autoCorrect={false}
@@ -232,10 +327,10 @@ export default function StorageDataModal({ visible, onClose }) {
 
               <Text style={[styles.inputLabel, { color: theme.textSecondary, marginTop: 12 }]}>UNSIGNED UPLOAD PRESET</Text>
               <TextInput
-                style={[styles.input, { backgroundColor: theme.surface, borderColor: theme.cardBorder, color: theme.text }]}
+                style={[styles.input, { backgroundColor: theme.background, borderColor: theme.cardBorder, color: theme.text }]}
                 value={uploadPreset}
                 onChangeText={setUploadPreset}
-                placeholder="e.g. filmroom_media_preset"
+                placeholder="e.g. your_unsigned_preset"
                 placeholderTextColor={theme.textMuted}
                 autoCapitalize="none"
                 autoCorrect={false}
@@ -245,22 +340,38 @@ export default function StorageDataModal({ visible, onClose }) {
                 <TouchableOpacity
                   style={[styles.saveConfigBtn, { backgroundColor: theme.primary }]}
                   onPress={handleSaveCloudinary}
-                  disabled={testingCloudinary}
+                  disabled={savingCloudinary || testingConnection}
+                  activeOpacity={0.8}
                 >
-                  {testingCloudinary ? (
+                  {savingCloudinary ? (
                     <ActivityIndicator size="small" color="#000" />
                   ) : (
-                    <Text style={styles.saveConfigBtnText}>Save & Apply Credentials</Text>
+                    <Text style={styles.saveConfigBtnText}>Save Configuration</Text>
                   )}
                 </TouchableOpacity>
 
                 <TouchableOpacity
-                  style={[styles.resetConfigBtn, { borderColor: theme.cardBorder }]}
-                  onPress={handleResetCloudinary}
+                  style={[styles.testConfigBtn, { borderColor: theme.primary, backgroundColor: theme.surface }]}
+                  onPress={handleTestConnection}
+                  disabled={testingConnection || savingCloudinary}
+                  activeOpacity={0.8}
                 >
-                  <Text style={[styles.resetConfigBtnText, { color: theme.textMuted }]}>Reset</Text>
+                  {testingConnection ? (
+                    <ActivityIndicator size="small" color={theme.primary} />
+                  ) : (
+                    <Text style={[styles.testConfigBtnText, { color: theme.primary }]}>Test Connection</Text>
+                  )}
                 </TouchableOpacity>
               </View>
+
+              <TouchableOpacity
+                style={[styles.clearConfigBtn, { borderColor: theme.cardBorder }]}
+                onPress={handleResetCloudinary}
+                disabled={testingConnection || savingCloudinary}
+                activeOpacity={0.7}
+              >
+                <Text style={[styles.clearConfigBtnText, { color: theme.textSecondary }]}>Clear Configuration</Text>
+              </TouchableOpacity>
             </View>
 
             {/* Detailed Storage Breakdown */}
@@ -521,6 +632,49 @@ const styles = StyleSheet.create({
     padding: 14,
     marginBottom: 16,
   },
+  securityNoticeBox: {
+    flexDirection: 'row',
+    padding: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    alignItems: 'flex-start',
+    marginBottom: 12,
+  },
+  securityNoticeIcon: {
+    fontSize: 14,
+    marginRight: 8,
+    marginTop: 1,
+  },
+  securityNoticeText: {
+    flex: 1,
+    fontSize: 11,
+    lineHeight: 16,
+  },
+  activeConfigBox: {
+    padding: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    marginBottom: 12,
+  },
+  activeConfigHeader: {
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+    marginBottom: 6,
+  },
+  activeConfigRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingVertical: 2,
+  },
+  activeConfigKey: {
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  activeConfigVal: {
+    fontSize: 11,
+    fontWeight: '700',
+  },
   configExplainer: {
     fontSize: 12,
     lineHeight: 16,
@@ -543,6 +697,7 @@ const styles = StyleSheet.create({
   configBtnRow: {
     flexDirection: 'row',
     alignItems: 'center',
+    gap: 8,
     marginTop: 14,
   },
   saveConfigBtn: {
@@ -551,24 +706,35 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     justifyContent: 'center',
     alignItems: 'center',
-    marginRight: 8,
   },
   saveConfigBtnText: {
     color: '#000',
     fontSize: 13,
     fontWeight: '800',
   },
-  resetConfigBtn: {
+  testConfigBtn: {
+    flex: 1,
     height: 40,
-    paddingHorizontal: 14,
     borderRadius: 8,
     borderWidth: 1,
     justifyContent: 'center',
     alignItems: 'center',
   },
-  resetConfigBtnText: {
+  testConfigBtnText: {
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  clearConfigBtn: {
+    height: 36,
+    borderRadius: 8,
+    borderWidth: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: 8,
+  },
+  clearConfigBtnText: {
     fontSize: 12,
-    fontWeight: '700',
+    fontWeight: '600',
   },
   breakdownCard: {
     borderRadius: 12,

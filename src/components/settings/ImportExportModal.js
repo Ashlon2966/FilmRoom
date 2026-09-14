@@ -14,6 +14,7 @@ import { collection, query, where, getDocs } from 'firebase/firestore';
 import { db } from '../../../firebaseConfig';
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
+import { useToast } from '../../context/ToastContext';
 import {
   exportFullFilmRoomBackup,
   exportProjectPackage,
@@ -36,6 +37,7 @@ const PROJECT_PACKAGE_CATEGORIES = [
 export default function ImportExportModal({ visible, onClose }) {
   const { theme } = useTheme();
   const { currentUser } = useAuth();
+  const { showToast } = useToast();
 
   // Mode: 'MENU' | 'IMPORT_PREVIEW' | 'PROJECT_CATEGORIES'
   const [viewMode, setViewMode] = useState('MENU');
@@ -65,8 +67,9 @@ export default function ImportExportModal({ visible, onClose }) {
     setIsProcessing(true);
     try {
       await exportFullFilmRoomBackup(currentUser?.uid);
+      showToast({ type: 'success', title: 'Export Complete', message: 'Full FilmRoom backup created.' });
     } catch (e) {
-      Alert.alert('Export Error', e.message);
+      showToast({ type: 'error', title: 'Export Error', message: e.message });
     } finally {
       setIsProcessing(false);
     }
@@ -81,13 +84,14 @@ export default function ImportExportModal({ visible, onClose }) {
       );
       const snap = await getDocs(q);
       if (snap.empty) {
-        Alert.alert('No Rooms Found', 'You do not have any active production rooms to export.');
+        showToast({ type: 'warning', message: 'You do not have any active production rooms to export.' });
         return;
       }
 
       const userRooms = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
       if (userRooms.length === 1) {
         await exportProjectPackage(userRooms[0].id);
+        showToast({ type: 'success', title: 'Export Complete', message: `Project package exported for "${userRooms[0].title}".` });
       } else {
         Alert.alert(
           'Select Room to Export',
@@ -95,14 +99,21 @@ export default function ImportExportModal({ visible, onClose }) {
           [
             ...userRooms.slice(0, 4).map((r) => ({
               text: r.title,
-              onPress: () => exportProjectPackage(r.id),
+              onPress: async () => {
+                try {
+                  await exportProjectPackage(r.id);
+                  showToast({ type: 'success', title: 'Export Complete', message: `Exported "${r.title}".` });
+                } catch (err) {
+                  showToast({ type: 'error', message: err.message });
+                }
+              },
             })),
             { text: 'Cancel', style: 'cancel' },
           ]
         );
       }
     } catch (e) {
-      Alert.alert('Export Error', e.message);
+      showToast({ type: 'error', message: e.message });
     }
   };
 
@@ -119,14 +130,14 @@ export default function ImportExportModal({ visible, onClose }) {
       const preview = await validateBackupFile(file.uri);
 
       if (!preview.isValid) {
-        Alert.alert('Invalid Backup', preview.error || 'The selected file is not a valid FilmRoom backup.');
+        showToast({ type: 'error', title: 'Invalid Backup', message: preview.error || 'The selected file is not a valid FilmRoom backup.' });
         return;
       }
 
       setImportPreviewData(preview);
       setViewMode('IMPORT_PREVIEW');
     } catch (err) {
-      Alert.alert('Import Notice', err.message || 'Could not read backup file.');
+      showToast({ type: 'error', message: err.message || 'Could not read backup file.' });
     }
   };
 
@@ -134,12 +145,13 @@ export default function ImportExportModal({ visible, onClose }) {
     setIsProcessing(true);
     try {
       const count = await restoreCloudDataToLocal(currentUser?.uid);
-      Alert.alert(
-        '✓ Cloud Data Restored',
-        `Restored ${count} production records from Firestore into your local SQLite cache.`
-      );
+      showToast({
+        type: 'success',
+        title: 'Cloud Data Restored',
+        message: `Restored ${count} production records from Firestore into your local SQLite cache.`,
+      });
     } catch (e) {
-      Alert.alert('Restore Notice', e.message);
+      showToast({ type: 'error', message: e.message });
     } finally {
       setIsProcessing(false);
     }
@@ -154,10 +166,10 @@ export default function ImportExportModal({ visible, onClose }) {
         conflictResolutions: {},
         userId: currentUser.uid,
       });
-      Alert.alert('✓ Import Complete', 'Selected backup records have been imported successfully.');
+      showToast({ type: 'success', title: 'Import Complete', message: 'Selected backup records have been imported successfully.' });
       onClose();
     } catch (e) {
-      Alert.alert('Import Error', e.message);
+      showToast({ type: 'error', title: 'Import Error', message: e.message });
     } finally {
       setIsProcessing(false);
     }

@@ -14,6 +14,7 @@ import {
   addDoc,
   updateDoc,
   setDoc,
+  getDoc,
   getDocs,
   query,
   where,
@@ -75,18 +76,22 @@ export const submitContactRequest = async ({
     sender: {
       uid: sender.uid,
       name: sender.name || sender.fullName || sender.displayName || 'Filmmaker',
+      fullName: sender.fullName || sender.name || sender.displayName || 'Filmmaker',
       username: sender.username || 'crew',
       role: sender.role || 'Filmmaker',
       category: sender.category || 'TALENT',
-      photoURL: sender.photoURL || null,
+      photoURL: sender.photoURL || sender.avatar || null,
+      avatar: sender.photoURL || sender.avatar || null,
     },
     targetTalent: {
       uid: targetTalent.uid,
       name: targetTalent.name || targetTalent.fullName || targetTalent.displayName || 'Filmmaker',
+      fullName: targetTalent.fullName || targetTalent.name || targetTalent.displayName || 'Filmmaker',
       username: targetTalent.username || 'crew',
       role: targetTalent.role || 'Filmmaker',
       category: targetTalent.category || 'TALENT',
-      photoURL: targetTalent.photoURL || null,
+      photoURL: targetTalent.photoURL || targetTalent.avatar || null,
+      avatar: targetTalent.photoURL || targetTalent.avatar || null,
     },
     isRoutedToManager,
     managerName,
@@ -97,10 +102,21 @@ export const submitContactRequest = async ({
       roleName: details.roleName || null,
       productionType: details.productionType || null,
       materialLink: details.materialLink || null,
+      shootDates: details.shootDates || null,
       // Flow B
       roleOrDepartment: details.roleOrDepartment || null,
       portfolioOrReel: details.portfolioOrReel || null,
       projectInterest: details.projectInterest || null,
+      // Actor / Casting Call specifics
+      isActorCall: !!details.isActorCall,
+      characterName: details.characterName || null,
+      characterDescription: details.characterDescription || null,
+      rolePosition: details.rolePosition || null,
+      genderPreference: details.genderPreference || null,
+      scriptUrl: details.scriptUrl || null,
+      scriptShared: details.scriptShared || false,
+      scriptSharePending: details.scriptSharePending || false,
+      requiresScriptApproval: details.requiresScriptApproval || false,
       // Common
       message: (details.message || '').trim(),
     },
@@ -225,11 +241,30 @@ export const acceptContactRequest = async (request) => {
 
   const now = new Date().toISOString();
 
+  const isFlowB = request.type === REQUEST_TYPES.TALENT_TO_HIRING;
+  const hasScript = !!request.details?.scriptUrl;
+
+  // Flow B (Actor applied to a Casting Call):
+  // Director accepts -> Script is unlocked automatically for the actor!
+  const shouldUnlockScriptNow = isFlowB && hasScript;
+
+  // Flow A (Director reached out to an Actor):
+  // Actor accepts -> Director will be prompted to share the draft script!
+  const shouldPendingScriptShare = !isFlowB && hasScript && !request.details?.scriptShared;
+
+  const scriptShared = shouldUnlockScriptNow ? true : (request.details?.scriptShared || false);
+  const scriptSharePending = shouldPendingScriptShare;
+
   // 1. Update contact request status
   await updateDoc(doc(db, 'contact_requests', request.id), {
     status: REQUEST_STATUS.ACCEPTED,
     resolvedAt: now,
     connectionId: canonicalConnectionId,
+    actorAccepted: true,
+    actorAcceptedAt: now,
+    'details.scriptShared': scriptShared,
+    'details.scriptSharePending': scriptSharePending,
+    ...(shouldUnlockScriptNow ? { 'details.scriptUnlockedAt': now } : {}),
   });
 
   // 2. Create or activate mutual connection document
@@ -249,6 +284,13 @@ export const acceptContactRequest = async (request) => {
       connectedAt: now,
       isManagerRouted: !!request.isRoutedToManager,
       managerUid,
+      // Script and Casting details
+      isActorCall: !!request.details?.isActorCall,
+      characterName: request.details?.characterName || null,
+      rolePosition: request.details?.rolePosition || null,
+      scriptUrl: request.details?.scriptUrl || null,
+      scriptShared,
+      scriptSharePending,
       userData: {
         [uidA]: request.sender,
         [uidB]: request.targetTalent,
@@ -263,20 +305,114 @@ export const acceptContactRequest = async (request) => {
     { merge: true }
   );
 
-  // Dispatch In-App Notification to original requester (uidA)
-  sendNotification({
-    recipientUid: uidA,
-    senderUid: request.recipientUid,
-    senderName: request.targetTalent?.name || 'Filmmaker',
-    senderPhotoURL: request.targetTalent?.photoURL || null,
-    type: NOTIFICATION_TYPES.REQUEST_ACCEPTED,
-    title: 'Connection Accepted',
-    message: `${request.targetTalent?.name || 'A filmmaker'} accepted your contact request! You are now connected.`,
-    targetId: canonicalConnectionId,
+  // 3. Dispatch Notifications
+  if (shouldUnlockScriptNow) {
+    // Notify the actor that audition was accepted AND script is unlocked!
+    sendNotification({
+      recipientUid: uidA,
+      senderUid: request.recipientUid,
+      senderName: request.targetTalent?.name || 'Director',
+      senderPhotoURL: request.targetTalent?.photoURL || null,
+      type: NOTIFICATION_TYPES.SCRIPT_SHARED,
+      title: 'Audition Accepted & Script Unlocked',
+      message: `Your application for ${request.details?.characterName || 'the role'} in ${request.details?.projectName || 'the production'} was accepted! The draft script has been unlocked for your review.`,
+      targetId: canonicalConnectionId,
+      targetType: 'CONNECTION',
+    });
+  } else if (shouldPendingScriptShare) {
+    // Notify the director that actor accepted, prompting to share draft script!
+    sendNotification({
+      recipientUid: uidA,
+      senderUid: request.recipientUid,
+      senderName: request.targetTalent?.name || 'Actor',
+      senderPhotoURL: request.targetTalent?.photoURL || null,
+      type: NOTIFICATION_TYPES.CASTING_ACCEPTED,
+      title: `${request.targetTalent?.name || 'Actor'} Accepted Role`,
+      message: `${request.targetTalent?.name || 'The actor'} accepted your inquiry for ${request.details?.characterName || request.details?.roleName || 'the role'}! Would you like to share the draft script?`,
+      targetId: request.id,
+      targetType: 'CONTACT_REQUEST',
+    });
+  } else {
+    // Standard connection accepted notification
+    sendNotification({
+      recipientUid: uidA,
+      senderUid: request.recipientUid,
+      senderName: request.targetTalent?.name || 'Filmmaker',
+      senderPhotoURL: request.targetTalent?.photoURL || null,
+      type: NOTIFICATION_TYPES.REQUEST_ACCEPTED,
+      title: 'Connection Accepted',
+      message: `${request.targetTalent?.name || 'A filmmaker'} accepted your contact request! You are now connected.`,
+      targetId: canonicalConnectionId,
+      targetType: 'CONNECTION',
+    });
+  }
+
+  return { connectionId: canonicalConnectionId };
+};
+
+/**
+ * In-Charge / Director shares the draft script sides with the actor
+ */
+export const shareDraftScript = async (requestId, scriptUrl = null) => {
+  if (!requestId) throw new Error('Request ID required.');
+
+  const reqRef = doc(db, 'contact_requests', requestId);
+  const snap = await getDoc(reqRef);
+  if (!snap.exists()) throw new Error('Contact request not found.');
+
+  const reqData = snap.data();
+  const now = new Date().toISOString();
+  const activeScriptUrl = scriptUrl || reqData.details?.scriptUrl || null;
+
+  const updateData = {
+    'details.scriptShared': true,
+    'details.scriptSharePending': false,
+    'details.scriptSharedAt': now,
+  };
+  if (activeScriptUrl) {
+    updateData['details.scriptUrl'] = activeScriptUrl;
+  }
+
+  await updateDoc(reqRef, updateData);
+
+  // Also update connection if it was already established
+  if (reqData.connectionId) {
+    const connRef = doc(db, 'connections', reqData.connectionId);
+    const connUpdate = {
+      scriptShared: true,
+      scriptSharePending: false,
+      scriptSharedAt: now,
+    };
+    if (activeScriptUrl) {
+      connUpdate.scriptUrl = activeScriptUrl;
+    }
+    await updateDoc(connRef, connUpdate).catch((e) => console.warn('Conn update notice:', e.message));
+  }
+
+  // Determine recipient actor
+  const actorUid = reqData.type === REQUEST_TYPES.TALENT_TO_HIRING
+    ? reqData.senderUid
+    : reqData.targetTalentUid || reqData.recipientUid;
+
+  const directorName = reqData.type === REQUEST_TYPES.TALENT_TO_HIRING
+    ? (reqData.targetTalent?.name || 'The director')
+    : (reqData.sender?.name || 'The director');
+
+  const projectName = reqData.details?.projectName || 'the production';
+
+  // Send Notification to the actor
+  await sendNotification({
+    recipientUid: actorUid,
+    senderUid: reqData.senderUid,
+    senderName: directorName,
+    type: NOTIFICATION_TYPES.SCRIPT_SHARED,
+    title: 'Draft Script Shared',
+    message: `${directorName} has shared the draft script for ${projectName} with you!`,
+    targetId: reqData.connectionId || requestId,
     targetType: 'CONNECTION',
   });
 
-  return { connectionId: canonicalConnectionId };
+  return { success: true };
 };
 
 /**

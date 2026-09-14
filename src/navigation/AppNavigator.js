@@ -1,5 +1,5 @@
 import React from 'react';
-import { Text } from 'react-native';
+import { Text, View, Image } from 'react-native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 
@@ -21,6 +21,7 @@ import Stage3_PreProdScreen from '../screens/pipeline/Stage3_PreProdScreen';
 import Stage4_ProductionScreen from '../screens/pipeline/Stage4_ProductionScreen';
 import Stage5_PostProdScreen from '../screens/pipeline/Stage5_PostProdScreen';
 
+import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../context/ThemeContext';
 
 const Tab = createBottomTabNavigator();
@@ -70,6 +71,8 @@ function ProfileStack() {
 
 export default function AppNavigator() {
   const { theme } = useTheme();
+  const { userProfile, currentUser } = useAuth();
+  const profilePhoto = userProfile?.photoURL || currentUser?.photoURL;
 
   return (
     <Tab.Navigator
@@ -122,7 +125,28 @@ export default function AppNavigator() {
         component={ProfileStack}
         options={{
           tabBarLabel: 'Profile',
-          tabBarIcon: () => <Text style={{ fontSize: 18 }}>👤</Text>,
+          tabBarIcon: ({ focused }) => (
+            profilePhoto ? (
+              <View
+                style={{
+                  width: 22,
+                  height: 22,
+                  borderRadius: 11,
+                  overflow: 'hidden',
+                  borderWidth: focused ? 2 : 1,
+                  borderColor: focused ? (theme?.primary || '#f5a623') : (theme?.cardBorder || '#334155'),
+                }}
+              >
+                <Image
+                  source={{ uri: profilePhoto }}
+                  style={{ width: '100%', height: '100%' }}
+                  resizeMode="cover"
+                />
+              </View>
+            ) : (
+              <Text style={{ fontSize: 18 }}>👤</Text>
+            )
+          ),
         }}
       />
     </Tab.Navigator>

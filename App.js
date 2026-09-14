@@ -4,6 +4,8 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { ThemeProvider } from './src/context/ThemeContext';
 import { AuthProvider } from './src/context/AuthContext';
 import { RoomProvider } from './src/context/RoomContext';
+import { ToastProvider } from './src/context/ToastContext';
+import { ModalProvider } from './src/context/ModalContext';
 import RootNavigator from './src/navigation/RootNavigator';
 
 export default function App() {
@@ -12,8 +14,12 @@ export default function App() {
       <ThemeProvider>
         <AuthProvider>
           <RoomProvider>
-            <StatusBar barStyle="light-content" />
-            <RootNavigator />
+            <ToastProvider>
+              <ModalProvider>
+                <StatusBar barStyle="light-content" />
+                <RootNavigator />
+              </ModalProvider>
+            </ToastProvider>
           </RoomProvider>
         </AuthProvider>
       </ThemeProvider>

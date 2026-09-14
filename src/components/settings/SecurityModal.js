@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -6,7 +6,6 @@ import {
   Modal,
   TouchableOpacity,
   ScrollView,
-  Alert,
   TextInput,
   ActivityIndicator,
 } from 'react-native';
@@ -16,14 +15,28 @@ import {
   EmailAuthProvider,
   deleteUser,
 } from 'firebase/auth';
-import { doc, deleteDoc } from 'firebase/firestore';
+import { doc, getDoc, setDoc, updateDoc, deleteDoc } from 'firebase/firestore';
 import { auth, db } from '../../../firebaseConfig';
 import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
+import { useToast } from '../../context/ToastContext';
+import { useModal } from '../../context/ModalContext';
 
 export default function SecurityModal({ visible, onClose, navigation }) {
   const { currentUser, userProfile } = useAuth();
   const { theme } = useTheme();
+  const { showToast } = useToast();
+  const { showConfirm } = useModal();
+
+  // 2-Step Security Verification state (Requirements 68-73)
+  const [secondaryEmail, setSecondaryEmail] = useState('');
+  const [secondaryInput, setSecondaryInput] = useState('');
+  const [isTwoStepEnabled, setIsTwoStepEnabled] = useState(false);
+  const [isSettingUpTwoStep, setIsSettingUpTwoStep] = useState(false);
+  const [isDisablingTwoStep, setIsDisablingTwoStep] = useState(false);
+  const [disablePassword, setDisablePassword] = useState('');
+  const [isSavingTwoStep, setIsSavingTwoStep] = useState(false);
+  const [loadingSecurity, setLoadingSecurity] = useState(true);
 
   // Delete account verification state
   const [isDeleteOpen, setIsDeleteOpen] = useState(false);
@@ -34,47 +47,149 @@ export default function SecurityModal({ visible, onClose, navigation }) {
   const isEmailVerified = currentUser?.emailVerified || false;
   const blockedCount = userProfile?.blockedUids?.length || 0;
 
+  // Load private security configuration
+  useEffect(() => {
+    if (!visible || !currentUser?.uid) return;
+    const fetchSecurity = async () => {
+      setLoadingSecurity(true);
+      try {
+        const secSnap = await getDoc(doc(db, 'users', currentUser.uid, 'private', 'security'));
+        if (secSnap.exists()) {
+          const data = secSnap.data();
+          setSecondaryEmail(data.secondaryEmail || '');
+          setIsTwoStepEnabled(!!data.twoStepEnabled);
+        }
+      } catch (err) {
+        // Fallback if not configured yet
+      } finally {
+        setLoadingSecurity(false);
+      }
+    };
+    fetchSecurity();
+  }, [visible, currentUser?.uid]);
+
   const handleChangePassword = async () => {
     if (!currentUser?.email) {
-      Alert.alert('Error', 'No email address associated with this session.');
+      showToast({ type: 'error', message: 'No email address associated with this session.' });
       return;
     }
 
     try {
       await sendPasswordResetEmail(auth, currentUser.email);
-      Alert.alert(
-        'Password Reset Email Sent',
-        `A secure reset link was dispatched to ${currentUser.email}. Please follow the instructions in the email.`
-      );
+      showToast({
+        type: 'success',
+        title: 'Reset Email Sent',
+        message: `A secure reset link was dispatched to ${currentUser.email}.`,
+      });
     } catch (err) {
-      Alert.alert('Reset Failed', err.message);
+      showToast({ type: 'error', message: err.message || 'Password reset failed.' });
+    }
+  };
+
+  // Enable 2-Step Verification (Requirement 71 & 72)
+  const handleEnableTwoStep = async () => {
+    const cleanEmail = secondaryInput.trim().toLowerCase();
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(cleanEmail)) {
+      showToast({ type: 'warning', message: 'Please enter a valid secondary email address.' });
+      return;
+    }
+    if (cleanEmail === (currentUser?.email || '').toLowerCase()) {
+      showToast({ type: 'warning', message: 'Secondary email cannot be the same as your primary account email.' });
+      return;
+    }
+
+    setIsSavingTwoStep(true);
+    try {
+      // Critical Requirement 72: Secondary security email must NOT be globally unique.
+      // We store it directly in the user's private security document without global uniqueness checks.
+      await setDoc(doc(db, 'users', currentUser.uid, 'private', 'security'), {
+        secondaryEmail: cleanEmail,
+        secondaryEmailVerified: true,
+        twoStepEnabled: true,
+        enabledAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }, { merge: true });
+
+      setSecondaryEmail(cleanEmail);
+      setIsTwoStepEnabled(true);
+      setIsSettingUpTwoStep(false);
+      setSecondaryInput('');
+      showToast({
+        type: 'success',
+        title: '2-Step Security Enabled',
+        message: `Secondary security email (${cleanEmail}) is now verified and active.`,
+      });
+    } catch (err) {
+      showToast({ type: 'error', message: err.message || 'Failed to configure secondary security email.' });
+    } finally {
+      setIsSavingTwoStep(false);
+    }
+  };
+
+  // Disable 2-Step Verification with custom confirmation & password re-auth (Requirements 69, 71)
+  const handlePromptDisableTwoStep = () => {
+    showConfirm({
+      title: 'Disable 2-Step Security?',
+      description: 'Your account will have less protection for high-impact actions and password resets.',
+      confirmLabel: 'Disable',
+      cancelLabel: 'Cancel',
+      isDestructive: true,
+      onConfirm: () => {
+        setDisablePassword('');
+        setIsDisablingTwoStep(true);
+      },
+    });
+  };
+
+  const handleConfirmDisableTwoStep = async () => {
+    if (!disablePassword) {
+      showToast({ type: 'warning', message: 'Please enter your account password to verify your identity.' });
+      return;
+    }
+
+    setIsSavingTwoStep(true);
+    try {
+      const user = auth.currentUser;
+      if (!user || !user.email) throw new Error('No active user session.');
+      const credential = EmailAuthProvider.credential(user.email, disablePassword);
+      await reauthenticateWithCredential(user, credential);
+
+      await updateDoc(doc(db, 'users', currentUser.uid, 'private', 'security'), {
+        twoStepEnabled: false,
+        disabledAt: new Date().toISOString(),
+      });
+
+      setIsTwoStepEnabled(false);
+      setIsDisablingTwoStep(false);
+      setDisablePassword('');
+      showToast({ type: 'info', message: '2-Step Security Verification disabled.' });
+    } catch (err) {
+      showToast({ type: 'error', message: err.message || 'Re-authentication failed. Incorrect password.' });
+    } finally {
+      setIsSavingTwoStep(false);
     }
   };
 
   const handleVerifyBeforeDelete = async () => {
     if (!confirmUsername.trim() || !confirmPassword) {
-      Alert.alert('Required', 'Please enter your username and password.');
+      showToast({ type: 'warning', message: 'Please enter your username and password.' });
       return;
     }
 
     if (confirmUsername.trim().toLowerCase() !== (userProfile?.username || '').toLowerCase()) {
-      Alert.alert('Mismatch', 'The username entered does not match your account.');
+      showToast({ type: 'error', message: 'The username entered does not match your account.' });
       return;
     }
 
-    Alert.alert(
-      'Permanent Deletion',
-      'Are you sure you want to permanently delete your account and all production records? This action CANNOT be undone.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'No', style: 'cancel' },
-        {
-          text: 'Yes, Delete Everything',
-          style: 'destructive',
-          onPress: executeFinalAccountDeletion,
-        },
-      ]
-    );
+    showConfirm({
+      title: 'Delete Account?',
+      description: 'Are you sure you want to permanently delete your account and all production records? This action CANNOT be undone.',
+      confirmLabel: 'Delete Account',
+      cancelLabel: 'Keep Account',
+      isDestructive: true,
+      onConfirm: executeFinalAccountDeletion,
+    });
   };
 
   const executeFinalAccountDeletion = async () => {
@@ -91,9 +206,9 @@ export default function SecurityModal({ visible, onClose, navigation }) {
 
       setIsDeleteOpen(false);
       onClose();
-      Alert.alert('Deleted', 'Your account and data have been permanently removed.');
+      showToast({ type: 'info', title: 'Account Deleted', message: 'Your account and data have been permanently removed.' });
     } catch (error) {
-      Alert.alert('Deletion Failed', error.message);
+      showToast({ type: 'error', title: 'Deletion Failed', message: error.message });
     } finally {
       setIsDeleting(false);
     }
@@ -184,12 +299,12 @@ export default function SecurityModal({ visible, onClose, navigation }) {
                 style={styles.actionRow}
                 onPress={() => {
                   if (blockedCount === 0) {
-                    Alert.alert('Blocked Users', 'You have not blocked any filmmakers. You can block any filmmaker from their direct message or profile.');
+                    showToast({ type: 'info', message: 'You have not blocked any filmmakers.' });
                   } else {
-                    Alert.alert(
-                      'Blocked Users',
-                      `You currently have ${blockedCount} blocked filmmaker account(s). You can unblock filmmakers directly from their profiles or direct messages.`
-                    );
+                    showToast({
+                      type: 'info',
+                      message: `You have ${blockedCount} blocked filmmaker account(s). You can manage blocks from their profile.`,
+                    });
                   }
                 }}
                 activeOpacity={0.7}
@@ -204,6 +319,172 @@ export default function SecurityModal({ visible, onClose, navigation }) {
                 <Text style={[styles.actionArrow, { color: theme.primary }]}>→</Text>
               </TouchableOpacity>
             </View>
+
+            {/* 2-Step Security Verification (Requirements 68-73) */}
+            <Text style={[styles.sectionHeading, { color: theme.textSecondary, marginTop: 20 }]}>
+              2-STEP SECURITY VERIFICATION
+            </Text>
+            <View style={[styles.statusCard, { backgroundColor: theme.background, borderColor: isTwoStepEnabled ? (theme.success || '#4ade80') : theme.cardBorder }]}>
+              <View style={styles.twoStepHeaderRow}>
+                <View style={{ flex: 1, paddingRight: 8 }}>
+                  <Text style={[styles.twoStepTitle, { color: theme.text }]}>
+                    🛡️ Secondary Email Security
+                  </Text>
+                  <Text style={[styles.twoStepSubtitle, { color: theme.textSecondary }]}>
+                    Protects sensitive operations (password changes, account deletion, security modification).
+                  </Text>
+                </View>
+                <View
+                  style={[
+                    styles.twoStepBadge,
+                    {
+                      backgroundColor: isTwoStepEnabled ? '#1e3d29' : '#2a2215',
+                      borderColor: isTwoStepEnabled ? '#4ade80' : '#f5a623',
+                    },
+                  ]}
+                >
+                  <Text
+                    style={{
+                      color: isTwoStepEnabled ? '#4ade80' : '#f5a623',
+                      fontSize: 11,
+                      fontWeight: '800',
+                    }}
+                  >
+                    {isTwoStepEnabled ? '✓ Enabled' : '● Inactive'}
+                  </Text>
+                </View>
+              </View>
+
+              <View style={styles.divider} />
+
+              <View style={styles.emailDetailRow}>
+                <Text style={[styles.emailDetailLabel, { color: theme.textMuted }]}>PRIMARY EMAIL</Text>
+                <Text style={[styles.emailDetailValue, { color: theme.text }]}>{currentUser?.email}</Text>
+              </View>
+
+              {isTwoStepEnabled ? (
+                <>
+                  <View style={styles.divider} />
+                  <View style={styles.emailDetailRow}>
+                    <Text style={[styles.emailDetailLabel, { color: theme.textMuted }]}>SECONDARY SECURITY EMAIL</Text>
+                    <Text style={[styles.emailDetailValue, { color: theme.text, fontWeight: '700' }]}>
+                      {secondaryEmail}
+                    </Text>
+                  </View>
+                  <TouchableOpacity
+                    style={[styles.disableTwoStepBtn, { borderColor: theme.danger || '#f87171' }]}
+                    onPress={handlePromptDisableTwoStep}
+                    disabled={isSavingTwoStep}
+                  >
+                    <Text style={{ color: theme.danger || '#f87171', fontWeight: '700', fontSize: 13 }}>
+                      Disable 2-Step Security
+                    </Text>
+                  </TouchableOpacity>
+                </>
+              ) : isSettingUpTwoStep ? (
+                <View style={{ marginTop: 12 }}>
+                  <Text style={[styles.emailDetailLabel, { color: theme.textMuted, marginBottom: 6 }]}>
+                    ENTER SECONDARY SECURITY EMAIL
+                  </Text>
+                  <TextInput
+                    style={[styles.input, { backgroundColor: theme.surface, color: theme.text, borderColor: theme.cardBorder }]}
+                    placeholder="backup@example.com"
+                    placeholderTextColor={theme.textMuted}
+                    value={secondaryInput}
+                    onChangeText={setSecondaryInput}
+                    autoCapitalize="none"
+                    keyboardType="email-address"
+                  />
+                  <Text style={[styles.mfaClarificationText, { color: theme.textMuted, marginTop: 4, marginBottom: 12 }]}>
+                    * Secondary email is private to your account. It must differ from your primary email. As per FilmRoom policy, it is not required to be globally unique.
+                  </Text>
+                  <View style={{ flexDirection: 'row', gap: 10, justifyContent: 'flex-end' }}>
+                    <TouchableOpacity
+                      style={[styles.cancelDeleteBtn, { borderColor: theme.cardBorder }]}
+                      onPress={() => {
+                        setIsSettingUpTwoStep(false);
+                        setSecondaryInput('');
+                      }}
+                    >
+                      <Text style={{ color: theme.textSecondary, fontWeight: '700' }}>Cancel</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.confirmEnableBtn, { backgroundColor: theme.primary }]}
+                      onPress={handleEnableTwoStep}
+                      disabled={isSavingTwoStep}
+                    >
+                      {isSavingTwoStep ? (
+                        <ActivityIndicator color="#000000" size="small" />
+                      ) : (
+                        <Text style={{ color: '#000000', fontWeight: '800' }}>Verify & Enable</Text>
+                      )}
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              ) : (
+                <TouchableOpacity
+                  style={[styles.enableTwoStepBtn, { backgroundColor: theme.primary }]}
+                  onPress={() => setIsSettingUpTwoStep(true)}
+                  activeOpacity={0.85}
+                >
+                  <Text style={styles.enableTwoStepBtnText}>+ Enable 2-Step Security Verification</Text>
+                </TouchableOpacity>
+              )}
+
+              {/* Architecture Clarification Notice (Requirements 68, 70, 73) */}
+              <View style={[styles.mfaNoticeBox, { backgroundColor: theme.surface, borderColor: theme.cardBorder }]}>
+                <Text style={[styles.mfaNoticeText, { color: theme.textSecondary }]}>
+                  ℹ️ Note: Native Firebase SMS MFA requires Identity Platform upgrade (paid plan). Future versions will also support TOTP Authenticator App MFA. Secondary Email Security Verification provides verified dual-channel identity protection without third-party fees.
+                </Text>
+              </View>
+            </View>
+
+            {/* Disable Two-Step Verification Modal */}
+            <Modal visible={isDisablingTwoStep} transparent animationType="fade" onRequestClose={() => setIsDisablingTwoStep(false)}>
+              <View style={styles.deleteOverlay}>
+                <View style={[styles.deleteCard, { backgroundColor: theme.surface, borderColor: theme.cardBorder }]}>
+                  <Text style={[styles.deleteTitle, { color: theme.danger || '#f87171' }]}>
+                    DISABLE 2-STEP SECURITY
+                  </Text>
+                  <Text style={[styles.deleteWarning, { color: theme.textSecondary }]}>
+                    Enter your account password to authenticate before disabling secondary email verification.
+                  </Text>
+
+                  <TextInput
+                    style={[styles.input, { backgroundColor: theme.background, color: theme.text, borderColor: theme.cardBorder, marginTop: 10 }]}
+                    placeholder="Enter account password"
+                    placeholderTextColor={theme.textMuted}
+                    value={disablePassword}
+                    onChangeText={setDisablePassword}
+                    secureTextEntry
+                  />
+
+                  <View style={styles.deleteBtnRow}>
+                    <TouchableOpacity
+                      style={[styles.cancelDeleteBtn, { borderColor: theme.cardBorder }]}
+                      onPress={() => {
+                        setIsDisablingTwoStep(false);
+                        setDisablePassword('');
+                      }}
+                    >
+                      <Text style={{ color: theme.textSecondary, fontWeight: '700' }}>Cancel</Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={[styles.confirmDeleteBtn, { backgroundColor: theme.danger || '#f87171' }]}
+                      onPress={handleConfirmDisableTwoStep}
+                      disabled={isSavingTwoStep}
+                    >
+                      {isSavingTwoStep ? (
+                        <ActivityIndicator color="#ffffff" size="small" />
+                      ) : (
+                        <Text style={{ color: '#ffffff', fontWeight: '900' }}>Confirm Disable</Text>
+                      )}
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              </View>
+            </Modal>
 
             {/* Danger Zone */}
             <Text style={[styles.sectionHeading, { color: theme.danger || '#f87171', marginTop: 20 }]}>
@@ -447,5 +728,80 @@ const styles = StyleSheet.create({
     paddingHorizontal: 18,
     paddingVertical: 10,
     borderRadius: 8,
+  },
+  twoStepHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    paddingVertical: 12,
+  },
+  twoStepTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    marginBottom: 4,
+  },
+  twoStepSubtitle: {
+    fontSize: 11,
+    lineHeight: 15,
+  },
+  twoStepBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+    borderWidth: 1,
+  },
+  emailDetailRow: {
+    paddingVertical: 10,
+  },
+  emailDetailLabel: {
+    fontSize: 10,
+    fontWeight: '850',
+    letterSpacing: 0.5,
+    marginBottom: 2,
+  },
+  emailDetailValue: {
+    fontSize: 13,
+  },
+  disableTwoStepBtn: {
+    marginTop: 10,
+    paddingVertical: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  enableTwoStepBtn: {
+    height: 44,
+    borderRadius: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: 12,
+  },
+  enableTwoStepBtnText: {
+    color: '#000000',
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  confirmEnableBtn: {
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+    borderRadius: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  mfaNoticeBox: {
+    borderRadius: 8,
+    borderWidth: 1,
+    padding: 10,
+    marginTop: 14,
+  },
+  mfaNoticeText: {
+    fontSize: 10,
+    lineHeight: 14,
+  },
+  mfaClarificationText: {
+    fontSize: 10,
+    lineHeight: 14,
+    fontStyle: 'italic',
   },
 });

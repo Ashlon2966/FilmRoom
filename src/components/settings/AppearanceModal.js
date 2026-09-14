@@ -10,6 +10,8 @@ import {
   Alert,
 } from 'react-native';
 import { useTheme } from '../../context/ThemeContext';
+import { useToast } from '../../context/ToastContext';
+import { useModal } from '../../context/ModalContext';
 import { ACCENT_PRESETS } from '../../styles/themes';
 
 const ACCENT_OPTIONS = Object.values(ACCENT_PRESETS);
@@ -24,6 +26,9 @@ export default function AppearanceModal({ visible, onClose }) {
     saveAppearanceSettings,
     resetAppearanceDefaults,
   } = useTheme();
+
+  const { showToast } = useToast();
+  const { showConfirm } = useModal();
 
   // Local draft state — pending until user presses [ Save Changes ]
   const [draftTheme, setDraftTheme] = useState(themeMode);
@@ -68,33 +73,29 @@ export default function AppearanceModal({ visible, onClose }) {
       reduceMotion: draftReduceMotion,
     });
     setHasChanges(false);
-    Alert.alert('✓ Appearance updated', 'Your visual theme and studio preferences have been saved.');
+    showToast({ type: 'success', title: 'Appearance Updated', message: 'Visual theme and studio preferences saved.' });
     onClose();
   };
 
   // Restore factory defaults (Cinema Dark, Cinema Gold)
   const handleRestoreDefaults = () => {
-    Alert.alert(
-      'Restore Defaults',
-      'Reset all appearance settings to Cinema Dark and Cinema Gold?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Reset Defaults',
-          style: 'destructive',
-          onPress: async () => {
-            await resetAppearanceDefaults();
-            setDraftTheme('CINEMA_DARK');
-            setDraftAccent('ORANGE');
-            setDraftTextSize('STANDARD');
-            setDraftReduceMotion(false);
-            setHasChanges(false);
-            Alert.alert('✓ Restored', 'Appearance settings reset to factory defaults.');
-            onClose();
-          },
-        },
-      ]
-    );
+    showConfirm({
+      title: 'Restore Defaults?',
+      description: 'Reset all appearance settings to Cinema Dark and Cinema Gold?',
+      confirmLabel: 'Reset Defaults',
+      cancelLabel: 'Cancel',
+      isDestructive: true,
+      onConfirm: async () => {
+        await resetAppearanceDefaults();
+        setDraftTheme('CINEMA_DARK');
+        setDraftAccent('ORANGE');
+        setDraftTextSize('STANDARD');
+        setDraftReduceMotion(false);
+        setHasChanges(false);
+        showToast({ type: 'info', message: 'Appearance settings reset to factory defaults.' });
+        onClose();
+      },
+    });
   };
 
   return (

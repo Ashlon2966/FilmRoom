@@ -6,6 +6,7 @@ import {
   Modal,
   TouchableOpacity,
   ScrollView,
+  Image,
 } from 'react-native';
 import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
@@ -36,8 +37,12 @@ export default function ProfilesPreviewModal({ visible, onClose }) {
             <Text style={[styles.sectionHeading, { color: theme.textSecondary }]}>PRIMARY IDENTITY</Text>
             <View style={[styles.profileCard, { backgroundColor: theme.background, borderColor: theme.cardBorder }]}>
               <View style={styles.profileHeaderRow}>
-                <View style={styles.badgeBox}>
-                  <Text style={styles.badgeEmoji}>🎬</Text>
+                <View style={[styles.badgeBox, { overflow: 'hidden', backgroundColor: theme.surface, borderColor: theme.primary + '55', borderWidth: 1 }]}>
+                  {userProfile?.photoURL ? (
+                    <Image source={{ uri: userProfile.photoURL }} style={{ width: '100%', height: '100%', borderRadius: 8 }} resizeMode="cover" />
+                  ) : (
+                    <Text style={styles.badgeEmoji}>🎬</Text>
+                  )}
                 </View>
                 <View style={{ flex: 1 }}>
                   <Text style={[styles.profileName, { color: theme.text }]}>

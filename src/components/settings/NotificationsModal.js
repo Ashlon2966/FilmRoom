@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { useTheme } from '../../context/ThemeContext';
+import { useToast } from '../../context/ToastContext';
 
 const DEFAULT_NOTIFS = {
   reqContact: true,
@@ -54,6 +55,7 @@ const parseTimeString = (timeStr) => {
 
 export default function NotificationsModal({ visible, onClose }) {
   const { theme } = useTheme();
+  const { showToast } = useToast();
 
   // Saved preferences & draft staging
   const [savedSettings, setSavedSettings] = useState(DEFAULT_NOTIFS);
@@ -90,7 +92,7 @@ export default function NotificationsModal({ visible, onClose }) {
 
   const handleSave = () => {
     setSavedSettings(draftSettings);
-    Alert.alert('✓ Saved', 'Your notification preferences have been saved.');
+    showToast({ type: 'success', title: 'Notifications Updated', message: 'Notification preferences saved.' });
     onClose();
   };
 
@@ -101,7 +103,7 @@ export default function NotificationsModal({ visible, onClose }) {
 
   const handleRestoreDefaults = () => {
     setDraftSettings(DEFAULT_NOTIFS);
-    Alert.alert('Defaults Restored', 'Notification preferences reset to factory defaults.');
+    showToast({ type: 'info', message: 'Notification preferences reset to factory defaults.' });
   };
 
   return (

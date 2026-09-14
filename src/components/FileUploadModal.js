@@ -34,7 +34,7 @@ export default function FileUploadModal({
   visible,
   onClose,
   onUploadSuccess,
-  folder = 'filmroom_media',
+  folder = 'filmroom_uploads',
 }) {
   const { theme } = useTheme();
 

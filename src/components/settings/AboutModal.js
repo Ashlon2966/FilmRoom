@@ -6,11 +6,34 @@ import {
   Modal,
   TouchableOpacity,
   ScrollView,
+  Linking,
 } from 'react-native';
 import { useTheme } from '../../context/ThemeContext';
+import { useAuth } from '../../context/AuthContext';
+import { useToast } from '../../context/ToastContext';
 
 export default function AboutModal({ visible, onClose }) {
   const { theme } = useTheme();
+  const { currentUser, userProfile } = useAuth();
+  const { showToast } = useToast();
+
+  const displayName = userProfile?.fullName || currentUser?.displayName || 'Filmmaker';
+  const supportPhone = '919766634560';
+  const prefilledMessage = `Hi Ashlon, I'm ${displayName}.\nI want to inquire about / ask a question / report an issue with the FilmRoom app.`;
+  const whatsappUrl = `https://wa.me/${supportPhone}?text=${encodeURIComponent(prefilledMessage)}`;
+
+  const handleContactSupport = async () => {
+    try {
+      const supported = await Linking.canOpenURL(whatsappUrl);
+      if (supported) {
+        await Linking.openURL(whatsappUrl);
+      } else {
+        await Linking.openURL(`https://api.whatsapp.com/send?phone=${supportPhone}&text=${encodeURIComponent(prefilledMessage)}`);
+      }
+    } catch (err) {
+      showToast({ type: 'error', message: 'Could not open WhatsApp on this device.' });
+    }
+  };
 
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
@@ -41,6 +64,16 @@ export default function AboutModal({ visible, onClose }) {
             </View>
 
             <View style={[styles.infoCard, { backgroundColor: theme.background, borderColor: theme.cardBorder }]}>
+              {/* Developer Attribution (Requirement 67) */}
+              <View style={styles.infoRow}>
+                <Text style={[styles.infoLabel, { color: theme.primary }]}>DEVELOPER & CREATIVE ARCHITECT</Text>
+                <Text style={[styles.infoValue, { color: theme.text, fontWeight: '800', fontSize: 14 }]}>
+                  Ashlon Braganca
+                </Text>
+              </View>
+
+              <View style={styles.divider} />
+
               <View style={styles.infoRow}>
                 <Text style={[styles.infoLabel, { color: theme.textSecondary }]}>CORE PURPOSE</Text>
                 <Text style={[styles.infoValue, { color: theme.text }]}>
@@ -67,6 +100,26 @@ export default function AboutModal({ visible, onClose }) {
                   • Offline Database: Local backup & pending sync
                 </Text>
               </View>
+            </View>
+
+            {/* Contact Developer & Support (Requirement 67) */}
+            <View style={[styles.contactCard, { backgroundColor: theme.card, borderColor: theme.cardBorder }]}>
+              <Text style={[styles.contactTitle, { color: theme.text }]}>
+                💬 Contact Developer / FilmRoom Support
+              </Text>
+              <Text style={[styles.contactSubtitle, { color: theme.textSecondary }]}>
+                Direct chat with Ashlon Braganca (+91 9766634560) via WhatsApp with your inquiry prefilled.
+              </Text>
+              <TouchableOpacity
+                style={[styles.whatsappBtn, { backgroundColor: '#25D366' }]}
+                onPress={handleContactSupport}
+                activeOpacity={0.85}
+              >
+                <Text style={styles.whatsappBtnText}>Open WhatsApp (+91 9766634560)</Text>
+              </TouchableOpacity>
+              <Text style={[styles.whatsappNote, { color: theme.textMuted }]}>
+                * WhatsApp will open with your message prefilled. Tap Send in WhatsApp to deliver.
+              </Text>
             </View>
 
             <TouchableOpacity
@@ -170,5 +223,38 @@ const styles = StyleSheet.create({
     color: '#000000',
     fontSize: 14,
     fontWeight: '800',
+  },
+  contactCard: {
+    borderRadius: 12,
+    borderWidth: 1,
+    padding: 16,
+    marginBottom: 8,
+  },
+  contactTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    marginBottom: 4,
+  },
+  contactSubtitle: {
+    fontSize: 12,
+    lineHeight: 16,
+    marginBottom: 12,
+  },
+  whatsappBtn: {
+    height: 44,
+    borderRadius: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  whatsappBtnText: {
+    color: '#ffffff',
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  whatsappNote: {
+    fontSize: 10,
+    fontStyle: 'italic',
+    lineHeight: 14,
   },
 });

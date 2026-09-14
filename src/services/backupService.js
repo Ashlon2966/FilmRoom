@@ -32,29 +32,99 @@ export async function exportFullFilmRoomBackup(userId) {
 
   try {
     // 1. User profile
-    const userSnap = await getDoc(doc(db, 'users', userId));
-    const userData = userSnap.exists() ? userSnap.data() : {};
+    let userData = {};
+    try {
+      const userSnap = await getDoc(doc(db, 'users', userId));
+      if (userSnap.exists()) {
+        userData = userSnap.data();
+      }
+    } catch (profErr) {
+      if (typeof __DEV__ !== 'undefined' && __DEV__) {
+        console.warn('Backup: Profile fetch warning:', profErr.message);
+      }
+    }
     // Clean sensitive auth/private fields if any
     delete userData.token;
     delete userData.auth;
 
     // 2. Production Rooms
-    const roomsSnap = await getDocs(
-      query(collection(db, 'rooms'), where('memberUids', 'array-contains', userId))
-    );
-    const roomsData = roomsSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    let roomsData = [];
+    try {
+      const roomsSnap = await getDocs(
+        query(collection(db, 'rooms'), where('memberUids', 'array-contains', userId))
+      );
+      roomsData = roomsSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    } catch (roomErr) {
+      if (typeof __DEV__ !== 'undefined' && __DEV__) {
+        console.warn('Backup: Rooms fetch warning:', roomErr.message);
+      }
+    }
 
     // 3. User's Published Crew Calls
-    const callsSnap = await getDocs(
-      query(collection(db, 'production_calls'), where('createdBy', '==', userId))
-    );
-    const callsData = callsSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    let callsData = [];
+    try {
+      const callsSnap = await getDocs(
+        query(collection(db, 'production_calls'), where('createdBy', '==', userId))
+      );
+      callsData = callsSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    } catch (callErr) {
+      if (typeof __DEV__ !== 'undefined' && __DEV__) {
+        console.warn('Backup: Production calls fetch warning:', callErr.message);
+      }
+    }
 
-    // 4. Shortlists
-    const shortlistsSnap = await getDocs(
-      query(collection(db, 'shortlists'), where('ownerId', '==', userId))
-    );
-    const shortlistsData = shortlistsSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    // 4. Shortlists (fetch from user subcollection first, fallback to root)
+    let shortlistsData = [];
+    try {
+      const subShortlistsSnap = await getDocs(collection(db, 'users', userId, 'shortlists'));
+      if (!subShortlistsSnap.empty) {
+        shortlistsData = subShortlistsSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      } else {
+        const rootShortlistsSnap = await getDocs(
+          query(collection(db, 'shortlists'), where('ownerId', '==', userId))
+        );
+        shortlistsData = rootShortlistsSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      }
+    } catch (shortErr) {
+      if (typeof __DEV__ !== 'undefined' && __DEV__) {
+        console.warn('Backup: Shortlists fetch warning:', shortErr.message);
+      }
+    }
+
+    // 5. User's Authorized Contact Requests
+    let requestsData = [];
+    try {
+      const outgoingSnap = await getDocs(
+        query(collection(db, 'contact_requests'), where('senderUid', '==', userId))
+      );
+      const incomingSnap = await getDocs(
+        query(collection(db, 'contact_requests'), where('recipientUid', '==', userId))
+      );
+      const seen = new Set();
+      [...outgoingSnap.docs, ...incomingSnap.docs].forEach((d) => {
+        if (!seen.has(d.id)) {
+          seen.add(d.id);
+          requestsData.push({ id: d.id, ...d.data() });
+        }
+      });
+    } catch (reqErr) {
+      if (typeof __DEV__ !== 'undefined' && __DEV__) {
+        console.warn('Backup: Contact requests fetch warning:', reqErr.message);
+      }
+    }
+
+    // 6. User's Authorized Connections
+    let connectionsData = [];
+    try {
+      const connsSnap = await getDocs(
+        query(collection(db, 'connections'), where('users', 'array-contains', userId))
+      );
+      connectionsData = connsSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    } catch (connErr) {
+      if (typeof __DEV__ !== 'undefined' && __DEV__) {
+        console.warn('Backup: Connections fetch warning:', connErr.message);
+      }
+    }
 
     const fileName = `filmroom_full_backup_${Date.now()}.json`;
     const destinationUri = `${FileSystem.documentDirectory}${fileName}`;
@@ -69,6 +139,8 @@ export async function exportFullFilmRoomBackup(userId) {
       rooms: roomsData,
       crewCalls: callsData,
       shortlists: shortlistsData,
+      contactRequests: requestsData,
+      connections: connectionsData,
       mediaReferences: {
         profilePhoto: userData.photoURL || null,
         roomPosters: roomsData.map((r) => ({ roomId: r.id, posterUrl: r.posterUrl })).filter((r) => r.posterUrl),
@@ -84,13 +156,13 @@ export async function exportFullFilmRoomBackup(userId) {
         mimeType: 'application/json',
         dialogTitle: `Save ${fileName} to Drive, Files or Cloud`,
       });
-    } else {
-      Alert.alert('✓ Backup Created', `Saved locally as ${fileName}`);
     }
-    return destinationUri;
+    return { uri: destinationUri, fileName, recordCount: roomsData.length + callsData.length + shortlistsData.length };
   } catch (err) {
-    console.error('Full backup error:', err);
-    Alert.alert('Backup Failed', err.message || 'Unable to export full backup.');
+    if (typeof __DEV__ !== 'undefined' && __DEV__) {
+      console.error('Full backup error:', err);
+    }
+    throw new Error("Couldn't create the full backup. Please try again.");
   }
 }
 

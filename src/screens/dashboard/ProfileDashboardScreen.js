@@ -13,7 +13,8 @@ import {
   Pressable,
 } from 'react-native';
 import { doc, updateDoc } from 'firebase/firestore';
-import { db } from '../../../firebaseConfig';
+import { updateProfile } from 'firebase/auth';
+import { auth, db } from '../../../firebaseConfig';
 import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
 import {
@@ -27,10 +28,12 @@ import {
 } from '../../config/rolesConfig';
 import { SingleDatePickerField } from '../../components/CinemaDatePicker';
 import MediaUploadModal from '../../components/MediaUploadModal';
+import { useToast } from '../../context/ToastContext';
 
 export default function ProfileDashboardScreen({ navigation }) {
   const { currentUser, userProfile } = useAuth();
   const { theme } = useTheme();
+  const { showToast } = useToast();
 
   const [activeTab, setActiveTab] = useState('Showreel');
 
@@ -119,8 +122,9 @@ export default function ProfileDashboardScreen({ navigation }) {
         isAvailable: selectedAvailStatus === AVAILABILITY_STATUS.AVAILABLE,
       });
       setIsAvailModalOpen(false);
+      showToast({ type: 'success', message: 'Availability updated' });
     } catch (err) {
-      Alert.alert('Update Failed', err.message);
+      showToast({ type: 'error', message: err.message || 'Update failed' });
     } finally {
       setIsSavingAvail(false);
     }
@@ -194,9 +198,9 @@ export default function ProfileDashboardScreen({ navigation }) {
         },
       });
       setIsEditing(false);
-      Alert.alert('Success', 'Profile dossier updated successfully.');
+      showToast({ type: 'success', message: 'Profile dossier updated successfully' });
     } catch (error) {
-      Alert.alert('Save Failed', error.message);
+      showToast({ type: 'error', message: error.message || 'Save failed' });
     } finally {
       setIsSavingProfile(false);
     }
@@ -210,9 +214,9 @@ export default function ProfileDashboardScreen({ navigation }) {
         showreelUrl: quickShowreelInput.trim(),
       });
       setQuickShowreelInput('');
-      Alert.alert('Showreel Linked', 'Your portfolio reel link has been attached.');
+      showToast({ type: 'success', message: 'Showreel link attached' });
     } catch (e) {
-      Alert.alert('Error', e.message);
+      showToast({ type: 'error', message: e.message || 'Could not attach showreel' });
     }
   };
 
@@ -229,9 +233,9 @@ export default function ProfileDashboardScreen({ navigation }) {
             await updateDoc(doc(db, 'users', currentUser.uid), {
               showreelUrl: null,
             });
-            Alert.alert('✓ Showreel Removed', 'Your showreel link has been removed.');
+            showToast({ type: 'info', message: 'Showreel link removed' });
           } catch (e) {
-            Alert.alert('Error', e.message);
+            showToast({ type: 'error', message: e.message || 'Could not remove showreel' });
           }
         },
       },
@@ -278,6 +282,9 @@ export default function ProfileDashboardScreen({ navigation }) {
               photoURL: null,
               photoMetadata: null,
             });
+            if (auth.currentUser) {
+              await updateProfile(auth.currentUser, { photoURL: null }).catch(() => {});
+            }
             setIsPhotoModalOpen(false);
           } catch (e) {
             Alert.alert('Error', e.message);
@@ -300,9 +307,13 @@ export default function ProfileDashboardScreen({ navigation }) {
           updatedAt: new Date().toISOString(),
         },
       });
+      if (auth.currentUser) {
+        await updateProfile(auth.currentUser, { photoURL: mediaRef.secureUrl }).catch(() => {});
+      }
       setIsPhotoModalOpen(false);
+      showToast({ type: 'success', message: 'Profile photo updated' });
     } catch (e) {
-      Alert.alert('Save Error', 'Failed to update profile with new photo.');
+      showToast({ type: 'error', message: 'Failed to update profile with new photo.' });
     }
   };
 
@@ -394,8 +405,8 @@ export default function ProfileDashboardScreen({ navigation }) {
             onPress={() => setIsPhotoModalOpen(true)}
             activeOpacity={0.8}
           >
-            {userProfile?.photoURL ? (
-              <Image source={{ uri: userProfile.photoURL }} style={styles.avatar} />
+            {(userProfile?.photoURL || currentUser?.photoURL) ? (
+              <Image source={{ uri: userProfile?.photoURL || currentUser?.photoURL }} style={styles.avatar} />
             ) : (
               <View style={[styles.avatarPlaceholder, { backgroundColor: theme.surface }]}>
                 <Text style={[styles.avatarInitial, { color: theme.primary }]}>
@@ -449,9 +460,18 @@ export default function ProfileDashboardScreen({ navigation }) {
           <View style={styles.badgeRow}>
             <View style={[styles.departmentBadge, { backgroundColor: '#2a2215', borderColor: theme.primary + '55' }]}>
               <Text style={[styles.departmentText, { color: theme.primary }]}>
-                {primaryRole}
+                ★ {primaryRole}
               </Text>
             </View>
+
+            {/* Secondary Roles */}
+            {Array.isArray(userProfile?.secondaryRoles) && userProfile.secondaryRoles.map((sr, i) => (
+              <View key={i} style={[styles.departmentBadge, { backgroundColor: theme.surface, borderColor: theme.cardBorder }]}>
+                <Text style={[styles.departmentText, { color: theme.textSecondary }]}>
+                  {sr}
+                </Text>
+              </View>
+            ))}
 
             {userProfile?.unionStatus && userProfile.unionStatus !== 'Non-Union' && (
               <View style={[styles.departmentBadge, { backgroundColor: '#18202c', borderColor: '#2b3952' }]}>
@@ -464,6 +484,7 @@ export default function ProfileDashboardScreen({ navigation }) {
 
           <Text style={[styles.metaLocation, { color: theme.textSecondary }]}>
             @{userProfile?.username || 'crew'}
+            {userProfile?.filmRoomId ? ` • ${userProfile.filmRoomId}` : ''}
             {userProfile?.location || userProfile?.city
               ? ` • 📍 ${userProfile.location || userProfile.city}`
               : ''}
@@ -1173,8 +1194,8 @@ export default function ProfileDashboardScreen({ navigation }) {
             <Text style={[styles.photoModalTitle, { color: theme.text }]}>Profile Photo</Text>
             
             <View style={[styles.largePhotoWrapper, { borderColor: theme.cardBorder }]}>
-              {userProfile?.photoURL ? (
-                <Image source={{ uri: userProfile.photoURL }} style={styles.largePhoto} resizeMode="cover" />
+              {(userProfile?.photoURL || currentUser?.photoURL) ? (
+                <Image source={{ uri: userProfile?.photoURL || currentUser?.photoURL }} style={styles.largePhoto} resizeMode="cover" />
               ) : (
                 <View style={[styles.largePhotoPlaceholder, { backgroundColor: theme.background }]}>
                   <Text style={[styles.largePhotoInitial, { color: theme.primary }]}>

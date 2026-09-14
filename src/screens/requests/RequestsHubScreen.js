@@ -9,23 +9,33 @@ import {
   Alert,
   Image,
   Linking,
+  TextInput,
+  Modal,
 } from 'react-native';
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
+import { useToast } from '../../context/ToastContext';
+import { useModal } from '../../context/ModalContext';
 import {
   streamIncomingRequests,
   streamOutgoingRequests,
   acceptContactRequest,
   declineContactRequest,
   toggleSaveContactRequest,
+  shareDraftScript,
   REQUEST_STATUS,
   REQUEST_TYPES,
 } from '../../services/contactRequestService';
-import { streamAcceptedConnections } from '../../services/connectionService';
+import { streamAcceptedConnections, sendConnectionRequest } from '../../services/connectionService';
+import { findUserByFilmRoomCode } from '../../services/userService';
+import CustomActionDropUp from '../../components/CustomActionDropUp';
+import QuickProfileModal from '../../components/QuickProfileModal';
 
 export default function RequestsHubScreen({ navigation }) {
   const { theme } = useTheme();
-  const { currentUser } = useAuth();
+  const { currentUser, userProfile } = useAuth();
+  const { showToast } = useToast();
+  const { showConfirm } = useModal();
 
   const [activeSegment, setActiveSegment] = useState('INCOMING'); // 'INCOMING' | 'OUTGOING' | 'SAVED' | 'CONNECTIONS'
   const [incomingRequests, setIncomingRequests] = useState([]);
@@ -33,6 +43,17 @@ export default function RequestsHubScreen({ navigation }) {
   const [connections, setConnections] = useState([]);
   const [loading, setLoading] = useState(true);
   const [actionLoadingId, setActionLoadingId] = useState(null);
+  const [sharingScriptId, setSharingScriptId] = useState(null);
+  const [dismissedPromptIds, setDismissedPromptIds] = useState({});
+
+  // FAB & Drop-Up State (Requirements 33, 34, 35, 79)
+  const [isFabDropUpVisible, setIsFabDropUpVisible] = useState(false);
+  const [isCodeModalVisible, setIsCodeModalVisible] = useState(false);
+  const [filmRoomCodeInput, setFilmRoomCodeInput] = useState('');
+  const [isSearchingCode, setIsSearchingCode] = useState(false);
+  const [selectedQuickProfile, setSelectedQuickProfile] = useState(null);
+  const [isQuickProfileVisible, setIsQuickProfileVisible] = useState(false);
+  const [isConnectionPickerVisible, setIsConnectionPickerVisible] = useState(false);
 
   // Stream Incoming Requests
   useEffect(() => {
@@ -76,9 +97,14 @@ export default function RequestsHubScreen({ navigation }) {
 
   const handleToggleSave = async (req) => {
     try {
+      const willSave = !req.isSaved;
       await toggleSaveContactRequest(req.id, !!req.isSaved);
+      showToast({
+        type: 'success',
+        message: willSave ? 'Inquiry saved to bookmarks' : 'Inquiry removed from saved',
+      });
     } catch (err) {
-      Alert.alert('Error', err.message);
+      showToast({ type: 'error', message: err.message || 'Failed to update saved status' });
     }
   };
 
@@ -87,29 +113,13 @@ export default function RequestsHubScreen({ navigation }) {
     setActionLoadingId(req.id);
     try {
       await acceptContactRequest(req);
-      Alert.alert(
-        'Connection Established',
-        `You and ${req.sender?.name || 'Filmmaker'} are now connected. Private messaging is unlocked.`,
-        [
-          { text: 'Later', style: 'cancel' },
-          {
-            text: 'Message Now',
-            onPress: () => {
-              navigation.navigate('DirectMessage', {
-                peerUser: {
-                  id: req.sender.uid,
-                  fullName: req.sender.name,
-                  username: req.sender.username,
-                  photoURL: req.sender.photoURL || null,
-                  role: req.sender.role,
-                },
-              });
-            },
-          },
-        ]
-      );
+      showToast({
+        type: 'success',
+        title: 'Connection Established',
+        message: `You and ${req.sender?.name || 'Filmmaker'} are now connected.`,
+      });
     } catch (err) {
-      Alert.alert('Error', err.message);
+      showToast({ type: 'error', message: err.message || 'Failed to accept request' });
     } finally {
       setActionLoadingId(null);
     }
@@ -117,35 +127,115 @@ export default function RequestsHubScreen({ navigation }) {
 
   // Handle Decline
   const handleDecline = (req) => {
-    Alert.alert(
-      'Decline Request',
-      `Are you sure you want to decline this inquiry from ${req.sender?.name || 'Filmmaker'}?`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Decline',
-          style: 'destructive',
-          onPress: async () => {
-            setActionLoadingId(req.id);
-            try {
-              await declineContactRequest(req.id);
-            } catch (err) {
-              Alert.alert('Error', err.message);
-            } finally {
-              setActionLoadingId(null);
-            }
-          },
-        },
-      ]
-    );
+    showConfirm({
+      title: 'Decline Request?',
+      message: `Are you sure you want to decline this inquiry from ${req.sender?.name || 'Filmmaker'}?`,
+      confirmText: 'Decline',
+      cancelText: 'Cancel',
+      isDestructive: true,
+      onConfirm: async () => {
+        setActionLoadingId(req.id);
+        try {
+          await declineContactRequest(req.id);
+          showToast({ type: 'info', message: 'Inquiry declined' });
+        } catch (err) {
+          showToast({ type: 'error', message: err.message || 'Failed to decline request' });
+        } finally {
+          setActionLoadingId(null);
+        }
+      },
+    });
+  };
+
+  // FAB Handlers (Requirements 33, 34, 35, 79)
+  const handleFabActionSelect = (action) => {
+    if (action.id === 'ADD_CONNECTION') {
+      setFilmRoomCodeInput('');
+      setIsCodeModalVisible(true);
+    } else if (action.id === 'START_CHAT') {
+      if (connections.length === 0) {
+        showToast({
+          type: 'info',
+          title: 'Connection Required',
+          message: 'Professional connection required before direct messaging. Connect with a filmmaker using their FilmRoom Code first.',
+        });
+      } else {
+        setIsConnectionPickerVisible(true);
+      }
+    }
+  };
+
+  const handleSearchFilmRoomCode = async () => {
+    const cleanCode = filmRoomCodeInput.trim().toUpperCase();
+    if (cleanCode.length !== 10) {
+      showToast({ type: 'warning', message: 'Enter a valid 10-character FilmRoom Code (e.g. FR7K2P91XA).' });
+      return;
+    }
+
+    if (userProfile?.filmRoomId && cleanCode === userProfile.filmRoomId.toUpperCase()) {
+      showToast({ type: 'info', message: 'This is your own FilmRoom Code.' });
+      return;
+    }
+
+    setIsSearchingCode(true);
+    try {
+      const user = await findUserByFilmRoomCode(cleanCode);
+      if (!user) {
+        showToast({ type: 'error', message: `No filmmaker found with code ${cleanCode}.` });
+        return;
+      }
+      setIsCodeModalVisible(false);
+      setSelectedQuickProfile(user);
+      setIsQuickProfileVisible(true);
+    } catch (err) {
+      showToast({ type: 'error', message: err.message || 'Error looking up code.' });
+    } finally {
+      setIsSearchingCode(false);
+    }
+  };
+
+  const handleSendConnectionRequestFromCode = async (targetUser) => {
+    try {
+      await sendConnectionRequest(currentUser, targetUser);
+      showToast({
+        type: 'success',
+        title: 'Request Dispatched',
+        message: `Connection request sent to ${targetUser.fullName || targetUser.displayName || 'filmmaker'}.`,
+      });
+      setIsQuickProfileVisible(false);
+      setSelectedQuickProfile(null);
+    } catch (err) {
+      showToast({ type: 'error', message: err.message || 'Failed to send connection request.' });
+    }
   };
 
   // Open Material Link
   const handleOpenLink = (url) => {
     if (!url) return;
     Linking.openURL(url).catch(() => {
-      Alert.alert('Error', 'Unable to open material link.');
+      showToast({ type: 'error', message: 'Unable to open material link.' });
     });
+  };
+
+  // In-Charge Shares Draft Script with Actor
+  const handleShareScript = async (requestId, scriptUrl = null) => {
+    setSharingScriptId(requestId);
+    try {
+      await shareDraftScript(requestId, scriptUrl);
+      showToast({
+        type: 'success',
+        title: 'Script Sides Shared',
+        message: 'The draft script sides have been unlocked and shared with the actor.',
+      });
+    } catch (err) {
+      showToast({
+        type: 'error',
+        title: 'Share Failed',
+        message: err.message || 'Could not share draft script sides.',
+      });
+    } finally {
+      setSharingScriptId(null);
+    }
   };
 
   return (
@@ -284,8 +374,11 @@ export default function RequestsHubScreen({ navigation }) {
                     style={[
                       styles.typePill,
                       {
-                        backgroundColor:
-                          item.type === REQUEST_TYPES.HIRING_TO_TALENT ? '#2a2215' : '#141a24',
+                        backgroundColor: item.details?.isActorCall
+                          ? '#281a3d'
+                          : item.type === REQUEST_TYPES.HIRING_TO_TALENT
+                          ? '#2a2215'
+                          : '#141a24',
                       },
                     ]}
                   >
@@ -293,12 +386,17 @@ export default function RequestsHubScreen({ navigation }) {
                       style={[
                         styles.typePillText,
                         {
-                          color:
-                            item.type === REQUEST_TYPES.HIRING_TO_TALENT ? theme.primary : '#93c5fd',
+                          color: item.details?.isActorCall
+                            ? '#c084fc'
+                            : item.type === REQUEST_TYPES.HIRING_TO_TALENT
+                            ? theme.primary
+                            : '#93c5fd',
                         },
                       ]}
                     >
-                      {item.type === REQUEST_TYPES.HIRING_TO_TALENT
+                      {item.details?.isActorCall
+                        ? (item.type === REQUEST_TYPES.HIRING_TO_TALENT ? '🎭 CASTING OFFER' : '🎭 ACTOR APPLICATION')
+                        : item.type === REQUEST_TYPES.HIRING_TO_TALENT
                         ? '🎬 HIRING INQUIRY'
                         : '🎗 TALENT SUBMISSION'}
                     </Text>
@@ -358,12 +456,12 @@ export default function RequestsHubScreen({ navigation }) {
 
                 {/* Sender Row */}
                 <View style={styles.senderRow}>
-                  {item.sender?.photoURL ? (
-                    <Image source={{ uri: item.sender.photoURL }} style={styles.senderAvatar} />
+                  {(item.sender?.photoURL || item.sender?.avatar) ? (
+                    <Image source={{ uri: item.sender.photoURL || item.sender.avatar }} style={styles.senderAvatar} />
                   ) : (
                     <View style={[styles.avatarPlaceholder, { backgroundColor: theme.surface }]}>
                       <Text style={[styles.avatarInitial, { color: theme.primary }]}>
-                        {item.sender?.name ? item.sender.name[0].toUpperCase() : 'F'}
+                        {(item.sender?.fullName || item.sender?.name) ? (item.sender.fullName || item.sender.name)[0].toUpperCase() : 'F'}
                       </Text>
                     </View>
                   )}
@@ -389,9 +487,25 @@ export default function RequestsHubScreen({ navigation }) {
                     </Text>
                   )}
 
-                  {item.details?.roleName && (
+                  {item.details?.characterName && (
+                    <Text style={[styles.detailLine, { color: theme.text }]}>
+                      Character / Role:{' '}
+                      <Text style={{ fontWeight: '800', color: '#c084fc' }}>
+                        {item.details.characterName}
+                      </Text>
+                      {item.details?.rolePosition ? ` • ${item.details.rolePosition}` : ''}
+                    </Text>
+                  )}
+
+                  {item.details?.roleName && !item.details?.characterName && (
                     <Text style={[styles.detailLine, { color: theme.text }]}>
                       Role Needed: <Text style={{ fontWeight: '700' }}>{item.details.roleName}</Text>
+                    </Text>
+                  )}
+
+                  {item.details?.characterDescription && (
+                    <Text style={[styles.detailLine, { color: theme.textSecondary, fontStyle: 'italic' }]}>
+                      Breakdown: {item.details.characterDescription}
                     </Text>
                   )}
 
@@ -401,7 +515,7 @@ export default function RequestsHubScreen({ navigation }) {
                     </Text>
                   )}
 
-                  {item.details?.roleOrDepartment && (
+                  {item.details?.roleOrDepartment && !item.details?.characterName && (
                     <Text style={[styles.detailLine, { color: theme.text }]}>
                       Craft / Consideration:{' '}
                       <Text style={{ fontWeight: '700' }}>{item.details.roleOrDepartment}</Text>
@@ -427,11 +541,43 @@ export default function RequestsHubScreen({ navigation }) {
                       </Text>
                     </TouchableOpacity>
                   )}
+
+                  {/* Draft Script Sides Display & Unlocking */}
+                  {item.details?.scriptUrl && (
+                    item.details?.scriptShared ? (
+                      <TouchableOpacity
+                        style={[styles.scriptSidesBtn, { backgroundColor: '#1e3d29', borderColor: '#4ade80' }]}
+                        onPress={() => handleOpenLink(item.details.scriptUrl)}
+                      >
+                        <Text style={{ color: '#4ade80', fontWeight: '800', fontSize: 12 }}>
+                          📖 Review Draft Script / Sides (Unlocked)
+                        </Text>
+                      </TouchableOpacity>
+                    ) : (
+                      <View style={[styles.lockedScriptNotice, { backgroundColor: theme.surface, borderColor: theme.cardBorder }]}>
+                        <Text style={{ color: '#f59e0b', fontSize: 11, fontWeight: '700' }}>
+                          🔒 Draft Script Sides Attached • Unlocks upon confirmation
+                        </Text>
+                      </View>
+                    )
+                  )}
                 </View>
 
                 {/* Actions Row */}
                 {isPending && (
                   <View style={styles.cardActionsRow}>
+                    <TouchableOpacity
+                      style={[styles.declineBtn, { borderColor: theme.cardBorder, marginRight: 6 }]}
+                      onPress={() => {
+                        setSelectedQuickProfile(item.sender);
+                        setIsQuickProfileVisible(true);
+                      }}
+                    >
+                      <Text style={{ color: theme.textSecondary, fontWeight: '700', fontSize: 12 }}>
+                        Quick View
+                      </Text>
+                    </TouchableOpacity>
+
                     <TouchableOpacity
                       style={[styles.declineBtn, { borderColor: theme.cardBorder }]}
                       onPress={() => handleDecline(item)}
@@ -478,13 +624,26 @@ export default function RequestsHubScreen({ navigation }) {
           contentContainerStyle={styles.listContent}
           renderItem={({ item }) => {
             const isAccepted = item.status === REQUEST_STATUS.ACCEPTED;
+            const targetAvatar = item.targetTalent?.photoURL || item.targetTalent?.avatar;
+            const targetName = item.targetTalent?.fullName || item.targetTalent?.name || 'Filmmaker';
 
             return (
               <View style={[styles.card, { backgroundColor: theme.card, borderColor: theme.cardBorder }]}>
                 <View style={styles.cardHeader}>
-                  <Text style={[styles.targetLabel, { color: theme.textSecondary }]}>
-                    Inquiry sent to {item.targetTalent?.name || 'Filmmaker'}
-                  </Text>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 8 }}>
+                    <View style={[styles.avatarPlaceholder, { width: 32, height: 32, borderRadius: 16, backgroundColor: theme.surface, overflow: 'hidden', marginRight: 8, justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: theme.cardBorder }]}>
+                      {targetAvatar ? (
+                        <Image source={{ uri: targetAvatar }} style={{ width: '100%', height: '100%' }} resizeMode="cover" />
+                      ) : (
+                        <Text style={[styles.avatarInitial, { color: theme.primary, fontSize: 13 }]}>
+                          {targetName[0]?.toUpperCase() || 'F'}
+                        </Text>
+                      )}
+                    </View>
+                    <Text style={[styles.targetLabel, { color: theme.textSecondary, flex: 1 }]} numberOfLines={1}>
+                      Inquiry sent to <Text style={{ color: theme.text, fontWeight: '800' }}>{targetName}</Text>
+                    </Text>
+                  </View>
                   <View
                     style={[
                       styles.statusPill,
@@ -522,7 +681,14 @@ export default function RequestsHubScreen({ navigation }) {
                   </Text>
                 )}
 
-                {item.details?.roleName && (
+                {item.details?.characterName && (
+                  <Text style={[styles.detailLine, { color: theme.text }]}>
+                    Role: <Text style={{ fontWeight: '800', color: '#c084fc' }}>{item.details.characterName}</Text>
+                    {item.details?.rolePosition ? ` • ${item.details.rolePosition}` : ''}
+                  </Text>
+                )}
+
+                {item.details?.roleName && !item.details?.characterName && (
                   <Text style={[styles.detailLine, { color: theme.text }]}>
                     Role: <Text style={{ fontWeight: '700' }}>{item.details.roleName}</Text>
                   </Text>
@@ -540,6 +706,62 @@ export default function RequestsHubScreen({ navigation }) {
                   </Text>
                 )}
 
+                {/* Director Script Sharing Prompt Card (Flow A: Director reached out to Actor, Actor accepted) */}
+                {isAccepted && item.details?.scriptUrl && !item.details?.scriptShared && item.type === REQUEST_TYPES.HIRING_TO_TALENT && !dismissedPromptIds[item.id] && (
+                  <View style={[styles.sharePromptCard, { backgroundColor: '#281a3d', borderColor: '#7c3aed' }]}>
+                    <Text style={{ color: '#c084fc', fontWeight: '800', fontSize: 12 }}>
+                      🎭 {item.targetTalent?.name || 'Actor'} Accepted Role!
+                    </Text>
+                    <Text style={{ color: '#e9d5ff', fontSize: 11, marginTop: 3, marginBottom: 8 }}>
+                      Would you like to share the draft script sides with {item.targetTalent?.name || 'them'} now?
+                    </Text>
+                    <View style={{ flexDirection: 'row', gap: 8 }}>
+                      <TouchableOpacity
+                        style={[styles.shareNowBtn, { backgroundColor: '#8b5cf6' }]}
+                        onPress={() => handleShareScript(item.id)}
+                        disabled={sharingScriptId === item.id}
+                      >
+                        {sharingScriptId === item.id ? (
+                          <ActivityIndicator size="small" color="#ffffff" />
+                        ) : (
+                          <Text style={{ color: '#ffffff', fontWeight: '800', fontSize: 11 }}>
+                            Share Script Now
+                          </Text>
+                        )}
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={[styles.shareLaterBtn, { borderColor: '#7c3aed' }]}
+                        onPress={() => setDismissedPromptIds({ ...dismissedPromptIds, [item.id]: true })}
+                      >
+                        <Text style={{ color: '#c084fc', fontWeight: '700', fontSize: 11 }}>
+                          Later
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                )}
+
+                {/* Director Script Shared Confirmation */}
+                {item.details?.scriptShared && (
+                  <View style={[styles.scriptSharedBadge, { backgroundColor: '#1e3d29', borderColor: '#4ade80' }]}>
+                    <Text style={{ color: '#4ade80', fontSize: 11, fontWeight: '700' }}>
+                      ✓ Draft script sides shared with {item.targetTalent?.name || 'actor'}
+                    </Text>
+                  </View>
+                )}
+
+                {/* Actor Review Button (Flow B: Actor applied to call, call accepted and script unlocked) */}
+                {isAccepted && item.details?.scriptShared && item.details?.scriptUrl && (
+                  <TouchableOpacity
+                    style={[styles.scriptSidesBtn, { backgroundColor: '#1e3d29', borderColor: '#4ade80' }]}
+                    onPress={() => handleOpenLink(item.details.scriptUrl)}
+                  >
+                    <Text style={{ color: '#4ade80', fontWeight: '800', fontSize: 12 }}>
+                      📖 Review Draft Script / Sides (Unlocked)
+                    </Text>
+                  </TouchableOpacity>
+                )}
+
                 {/* If accepted, offer direct message button */}
                 {isAccepted && (
                   <TouchableOpacity
@@ -548,9 +770,9 @@ export default function RequestsHubScreen({ navigation }) {
                       navigation.navigate('DirectMessage', {
                         peerUser: {
                           id: item.targetTalent.uid,
-                          fullName: item.targetTalent.name,
+                          fullName: item.targetTalent.fullName || item.targetTalent.name,
                           username: item.targetTalent.username,
-                          photoURL: item.targetTalent.photoURL || null,
+                          photoURL: item.targetTalent.photoURL || item.targetTalent.avatar || null,
                           role: item.targetTalent.role,
                         },
                       });
@@ -584,13 +806,26 @@ export default function RequestsHubScreen({ navigation }) {
           contentContainerStyle={styles.listContent}
           renderItem={({ item }) => {
             const isPending = item.status === REQUEST_STATUS.PENDING;
+            const senderAvatar = item.sender?.photoURL || item.sender?.avatar;
+            const senderName = item.sender?.fullName || item.sender?.name || 'Filmmaker';
 
             return (
               <View style={[styles.card, { backgroundColor: theme.card, borderColor: theme.cardBorder }]}>
                 <View style={styles.cardHeader}>
-                  <Text style={[styles.targetLabel, { color: theme.primary }]}>
-                    ★ Saved Inquiry from {item.sender?.name || 'Filmmaker'}
-                  </Text>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 8 }}>
+                    <View style={[styles.avatarPlaceholder, { width: 32, height: 32, borderRadius: 16, backgroundColor: theme.surface, overflow: 'hidden', marginRight: 8, justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: theme.cardBorder }]}>
+                      {senderAvatar ? (
+                        <Image source={{ uri: senderAvatar }} style={{ width: '100%', height: '100%' }} resizeMode="cover" />
+                      ) : (
+                        <Text style={[styles.avatarInitial, { color: theme.primary, fontSize: 13 }]}>
+                          {senderName[0]?.toUpperCase() || 'F'}
+                        </Text>
+                      )}
+                    </View>
+                    <Text style={[styles.targetLabel, { color: theme.primary, flex: 1 }]} numberOfLines={1}>
+                      ★ Saved Inquiry from {senderName}
+                    </Text>
+                  </View>
                   <TouchableOpacity onPress={() => handleToggleSave(item)} style={styles.starSaveBtn}>
                     <Text style={{ fontSize: 16, color: theme.primary }}>★</Text>
                   </TouchableOpacity>
@@ -660,8 +895,8 @@ export default function RequestsHubScreen({ navigation }) {
             return (
               <View style={[styles.card, { backgroundColor: theme.card, borderColor: theme.cardBorder }]}>
                 <View style={styles.senderRow}>
-                  {peerData.photoURL ? (
-                    <Image source={{ uri: peerData.photoURL }} style={styles.senderAvatar} />
+                  {(peerData.photoURL || peerData.avatar) ? (
+                    <Image source={{ uri: peerData.photoURL || peerData.avatar }} style={styles.senderAvatar} />
                   ) : (
                     <View style={[styles.avatarPlaceholder, { backgroundColor: theme.surface }]}>
                       <Text style={[styles.avatarInitial, { color: theme.primary }]}>
@@ -687,7 +922,7 @@ export default function RequestsHubScreen({ navigation }) {
                           id: peerId,
                           fullName: peerData.fullName || peerData.name || 'Filmmaker',
                           username: peerData.username || 'crew',
-                          photoURL: peerData.photoURL || null,
+                          photoURL: peerData.photoURL || peerData.avatar || null,
                           role: peerData.role || 'Creative',
                         },
                       });
@@ -697,6 +932,18 @@ export default function RequestsHubScreen({ navigation }) {
                     <Text style={styles.messageBtnText}>💬 Message</Text>
                   </TouchableOpacity>
                 </View>
+
+                {/* Script Sides if unlocked in connection */}
+                {item.scriptShared && item.scriptUrl && (
+                  <TouchableOpacity
+                    style={[styles.scriptSidesBtn, { backgroundColor: '#1e3d29', borderColor: '#4ade80', marginTop: 8 }]}
+                    onPress={() => handleOpenLink(item.scriptUrl)}
+                  >
+                    <Text style={{ color: '#4ade80', fontWeight: '800', fontSize: 12 }}>
+                      📖 Review Draft Script / Sides (Unlocked)
+                    </Text>
+                  </TouchableOpacity>
+                )}
               </View>
             );
           }}
@@ -711,6 +958,153 @@ export default function RequestsHubScreen({ navigation }) {
               </Text>
             </View>
           }
+        />
+      )}
+
+      {/* Floating Action Button (Requirements 33 & 79) */}
+      <TouchableOpacity
+        style={[styles.fabBtn, { backgroundColor: theme.primary || '#f5a623' }]}
+        onPress={() => setIsFabDropUpVisible(true)}
+        activeOpacity={0.85}
+      >
+        <Text style={styles.fabBtnText}>+</Text>
+      </TouchableOpacity>
+
+      {/* Custom Action Drop-Up (Requirement 79) */}
+      <CustomActionDropUp
+        visible={isFabDropUpVisible}
+        title="COMMUNICATIONS & NETWORK"
+        actions={[
+          {
+            id: 'ADD_CONNECTION',
+            label: 'Add New Connection',
+            description: 'Find a filmmaker by 10-character FilmRoom Code',
+            icon: '🔗',
+          },
+          {
+            id: 'START_CHAT',
+            label: 'Start New Chat',
+            description: 'Message one of your verified professional connections',
+            icon: '💬',
+          },
+        ]}
+        onSelect={handleFabActionSelect}
+        onClose={() => setIsFabDropUpVisible(false)}
+      />
+
+      {/* FilmRoom Code Lookup Modal (Requirement 34) */}
+      <Modal visible={isCodeModalVisible} transparent animationType="fade" onRequestClose={() => setIsCodeModalVisible(false)}>
+        <View style={styles.codeModalOverlay}>
+          <View style={[styles.codeModalCard, { backgroundColor: theme.card || '#181b1f', borderColor: theme.cardBorder || '#242830' }]}>
+            <Text style={[styles.codeModalTitle, { color: theme.text || '#ffffff' }]}>FIND FILMMAKER</Text>
+            <Text style={[styles.codeModalSubtitle, { color: theme.textSecondary || '#9ca3af' }]}>
+              Enter their unique 10-character FilmRoom Code (e.g. FR7K2P91XA)
+            </Text>
+
+            <TextInput
+              style={[
+                styles.codeInput,
+                {
+                  backgroundColor: theme.surface || '#121417',
+                  borderColor: theme.cardBorder || '#242830',
+                  color: theme.text || '#ffffff',
+                },
+              ]}
+              placeholder="FR..."
+              placeholderTextColor={theme.textMuted || '#64748b'}
+              value={filmRoomCodeInput}
+              onChangeText={(t) => setFilmRoomCodeInput(t.toUpperCase())}
+              autoCapitalize="characters"
+              maxLength={10}
+            />
+
+            <View style={styles.codeModalActions}>
+              <TouchableOpacity
+                style={[styles.codeCancelBtn, { borderColor: theme.cardBorder || '#242830' }]}
+                onPress={() => setIsCodeModalVisible(false)}
+              >
+                <Text style={{ color: theme.textSecondary || '#9ca3af', fontWeight: '700', fontSize: 13 }}>Cancel</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.codeFindBtn, { backgroundColor: theme.primary || '#f5a623' }]}
+                onPress={handleSearchFilmRoomCode}
+                disabled={isSearchingCode}
+              >
+                {isSearchingCode ? (
+                  <ActivityIndicator size="small" color="#000000" />
+                ) : (
+                  <Text style={{ color: '#000000', fontWeight: '800', fontSize: 13 }}>Find User</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Connection Picker for Start New Chat (Requirement 35) */}
+      <Modal visible={isConnectionPickerVisible} transparent animationType="slide" onRequestClose={() => setIsConnectionPickerVisible(false)}>
+        <View style={styles.codeModalOverlay}>
+          <View style={[styles.connectionPickerCard, { backgroundColor: theme.card || '#181b1f', borderColor: theme.cardBorder || '#242830' }]}>
+            <View style={styles.pickerHeaderRow}>
+              <Text style={[styles.codeModalTitle, { color: theme.text || '#ffffff' }]}>START NEW CHAT</Text>
+              <TouchableOpacity onPress={() => setIsConnectionPickerVisible(false)}>
+                <Text style={{ color: theme.textMuted || '#64748b', fontSize: 18 }}>✕</Text>
+              </TouchableOpacity>
+            </View>
+            <Text style={[styles.codeModalSubtitle, { color: theme.textSecondary || '#9ca3af' }]}>
+              Select a verified connection to open direct messaging
+            </Text>
+            <FlatList
+              data={connections}
+              keyExtractor={(c) => c.id}
+              style={{ maxHeight: 280 }}
+              renderItem={({ item: conn }) => {
+                const peerId = (conn.users || []).find((id) => id !== currentUser?.uid);
+                const peer = conn.userData?.[peerId] || conn.participants?.[peerId] || {};
+                return (
+                  <TouchableOpacity
+                    style={[
+                      styles.connPickerItem,
+                      { backgroundColor: theme.surface || '#121417', borderColor: theme.cardBorder || '#242830' },
+                    ]}
+                    onPress={() => {
+                      setIsConnectionPickerVisible(false);
+                      navigation.navigate('DirectMessage', {
+                        peerUser: {
+                          id: peerId,
+                          fullName: peer.fullName || peer.name || 'Filmmaker',
+                          username: peer.username || 'crew',
+                          photoURL: peer.photoURL || peer.avatar || null,
+                          role: peer.role || 'Filmmaker',
+                        },
+                      });
+                    }}
+                  >
+                    <Text style={{ color: theme.text || '#ffffff', fontWeight: '700', fontSize: 13 }}>
+                      {peer.fullName || peer.name || 'Filmmaker'}
+                    </Text>
+                    <Text style={{ color: theme.primary || '#f5a623', fontSize: 11, marginTop: 2 }}>
+                      {peer.role || 'Connection'}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              }}
+            />
+          </View>
+        </View>
+      </Modal>
+
+      {/* Quick Profile Modal for Code-found User */}
+      {selectedQuickProfile && (
+        <QuickProfileModal
+          visible={isQuickProfileVisible}
+          profile={selectedQuickProfile}
+          onClose={() => {
+            setIsQuickProfileVisible(false);
+            setSelectedQuickProfile(null);
+          }}
+          onAccept={() => handleSendConnectionRequestFromCode(selectedQuickProfile)}
         />
       )}
     </View>
@@ -950,5 +1344,144 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginTop: 6,
     lineHeight: 18,
+  },
+  scriptSidesBtn: {
+    paddingVertical: 9,
+    paddingHorizontal: 12,
+    borderRadius: 6,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 8,
+  },
+  sharePromptCard: {
+    padding: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    marginTop: 10,
+    marginBottom: 4,
+  },
+  shareNowBtn: {
+    paddingVertical: 7,
+    paddingHorizontal: 14,
+    borderRadius: 6,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  shareLaterBtn: {
+    paddingVertical: 7,
+    paddingHorizontal: 12,
+    borderRadius: 6,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  lockedScriptNotice: {
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 6,
+    borderWidth: 1,
+    marginTop: 8,
+    alignItems: 'center',
+  },
+  scriptSharedBadge: {
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 6,
+    borderWidth: 1,
+    marginTop: 8,
+    alignItems: 'center',
+  },
+  fabBtn: {
+    position: 'absolute',
+    bottom: 24,
+    right: 20,
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    justifyContent: 'center',
+    alignItems: 'center',
+    elevation: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.4,
+    shadowRadius: 6,
+    zIndex: 999,
+  },
+  fabBtnText: {
+    fontSize: 32,
+    fontWeight: '700',
+    color: '#000000',
+    lineHeight: 34,
+  },
+  codeModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.8)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  codeModalCard: {
+    width: '100%',
+    maxWidth: 360,
+    borderRadius: 14,
+    borderWidth: 1,
+    padding: 20,
+  },
+  codeModalTitle: {
+    fontSize: 16,
+    fontWeight: '900',
+    letterSpacing: 1,
+  },
+  codeModalSubtitle: {
+    fontSize: 12,
+    marginTop: 4,
+    marginBottom: 14,
+  },
+  codeInput: {
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    fontSize: 16,
+    fontWeight: '700',
+    letterSpacing: 2,
+    textAlign: 'center',
+    marginBottom: 16,
+  },
+  codeModalActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 10,
+  },
+  codeCancelBtn: {
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 6,
+    borderWidth: 1,
+  },
+  codeFindBtn: {
+    paddingVertical: 8,
+    paddingHorizontal: 18,
+    borderRadius: 6,
+  },
+  connectionPickerCard: {
+    width: '100%',
+    maxWidth: 380,
+    borderRadius: 14,
+    borderWidth: 1,
+    padding: 20,
+    maxHeight: 400,
+  },
+  pickerHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  connPickerItem: {
+    padding: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    marginBottom: 8,
   },
 });

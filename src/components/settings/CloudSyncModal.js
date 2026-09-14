@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
+import { useToast } from '../../context/ToastContext';
 import { syncNow, getPendingQueueCount, getLastSyncMetadata } from '../../services/syncService';
 
 const DEFAULT_SYNC_PREFS = {
@@ -25,6 +26,7 @@ const DEFAULT_SYNC_PREFS = {
 export default function CloudSyncModal({ visible, onClose }) {
   const { theme } = useTheme();
   const { currentUser } = useAuth();
+  const { showToast } = useToast();
 
   const [isSyncing, setIsSyncing] = useState(false);
   const [lastSynced, setLastSynced] = useState('Checking...');
@@ -63,15 +65,16 @@ export default function CloudSyncModal({ visible, onClose }) {
       );
 
       if (result.syncedCount === 0 && result.failedCount === 0 && result.conflictCount === 0) {
-        Alert.alert('✓ Up to Date', 'All local production records are synchronized with Firebase.');
+        showToast({ type: 'success', title: 'Up to Date', message: 'All local production records are synchronized with Firebase.' });
       } else {
-        Alert.alert(
-          'Cloud Sync Complete',
-          `${result.syncedCount} item(s) synced.${result.failedCount > 0 ? `\n${result.failedCount} item(s) failed.` : ''}${result.conflictCount > 0 ? `\n${result.conflictCount} conflict(s) detected.` : ''}`
-        );
+        showToast({
+          type: 'success',
+          title: 'Sync Complete',
+          message: `${result.syncedCount} item(s) synced.${result.failedCount > 0 ? ` ${result.failedCount} failed.` : ''}`,
+        });
       }
     } catch (err) {
-      Alert.alert('Sync Notice', err.message || 'Unable to sync with Firebase.');
+      showToast({ type: 'error', message: err.message || 'Unable to sync with Firebase.' });
     } finally {
       setIsSyncing(false);
     }
@@ -79,7 +82,7 @@ export default function CloudSyncModal({ visible, onClose }) {
 
   const handleSaveChanges = () => {
     setSavedPrefs(draftPrefs);
-    Alert.alert('✓ Saved', 'Sync preferences have been updated.');
+    showToast({ type: 'success', title: 'Sync Updated', message: 'Sync preferences updated.' });
     onClose();
   };
 
@@ -90,7 +93,7 @@ export default function CloudSyncModal({ visible, onClose }) {
 
   const handleRestoreDefaults = () => {
     setDraftPrefs(DEFAULT_SYNC_PREFS);
-    Alert.alert('Defaults Restored', 'Sync preferences reset to factory defaults.');
+    showToast({ type: 'info', message: 'Sync preferences reset to factory defaults.' });
   };
 
   return (

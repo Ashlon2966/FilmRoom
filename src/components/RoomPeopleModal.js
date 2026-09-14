@@ -15,6 +15,8 @@ import { collection, query, where, getDocs, doc, updateDoc, deleteField, arrayUn
 import { db } from '../../firebaseConfig';
 import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
+import { useToast } from '../context/ToastContext';
+import { useModal } from '../context/ModalContext';
 import FilmmakerDetailModal from './FilmmakerDetailModal';
 import { sendNotification, NOTIFICATION_TYPES } from '../services/notificationService';
 
@@ -47,6 +49,8 @@ export const PRODUCTION_ROLES = [
 export default function RoomPeopleModal({ visible, roomId, roomData, onClose }) {
   const { theme } = useTheme();
   const { currentUser } = useAuth();
+  const { showToast } = useToast();
+  const { showConfirm } = useModal();
 
   // Determine current user's access level in this room
   const currentUserAccess =
@@ -67,7 +71,7 @@ export default function RoomPeopleModal({ visible, roomId, roomData, onClose }) 
     globalRole: m.globalRole || m.role || 'Filmmaker',
     productionRole: m.productionRole || m.roles?.[0] || 'Crew',
     roomAccess: m.roomAccess || 'Crew',
-    photoURL: m.photoURL || null,
+    photoURL: m.photoURL || m.avatar || null,
     addedAt: m.addedAt || null,
   }));
 
@@ -116,7 +120,7 @@ export default function RoomPeopleModal({ visible, roomId, roomData, onClose }) 
             name: u.fullName || u.displayName || 'Filmmaker',
             username: u.username || 'filmmaker',
             role: u.role || u.roles?.[0] || 'Filmmaker',
-            photoURL: u.photoURL || null,
+            photoURL: u.photoURL || u.avatar || null,
             bio: u.bio || '',
             category: u.category || 'TALENT',
             showreelUrl: u.showreelUrl || null,
@@ -149,7 +153,7 @@ export default function RoomPeopleModal({ visible, roomId, roomData, onClose }) 
           globalRole: selectedUser.role,
           productionRole: finalRole,
           roomAccess: selectedRoomAccess,
-          photoURL: selectedUser.photoURL,
+          photoURL: selectedUser.photoURL || selectedUser.avatar || null,
           addedAt: new Date().toISOString(),
         },
         memberUids: arrayUnion(selectedUser.id),
@@ -167,44 +171,40 @@ export default function RoomPeopleModal({ visible, roomId, roomData, onClose }) 
         targetType: 'ROOM',
       });
 
-      Alert.alert('✓ Person Added', `${selectedUser.name} has been added as ${finalRole} (${selectedRoomAccess}).`);
+      showToast({ type: 'success', message: `${selectedUser.name} added as ${finalRole} (${selectedRoomAccess}).` });
       setIsAddModalOpen(false);
       setSelectedUser(null);
       setSearchQuery('');
       setSearchResults([]);
       setCustomRoleText('');
     } catch (err) {
-      Alert.alert('Error', err.message || 'Could not add person to room.');
+      showToast({ type: 'error', message: err.message || 'Could not add person to room.' });
     } finally {
       setIsSavingMember(false);
     }
   };
 
-  // Remove person from Room
+  // Remove person from Room (Requirement 7 & 22)
   const handleRemovePerson = (member) => {
-    Alert.alert(
-      'Remove from Production',
-      `Remove ${member.name} (${member.productionRole}) from this Production Room?`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Remove',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              const roomRef = doc(db, 'rooms', roomId);
-              await updateDoc(roomRef, {
-                [`members.${member.uid}`]: deleteField(),
-                memberUids: arrayRemove(member.uid),
-              });
-              Alert.alert('✓ Removed', `${member.name} has been removed from this room.`);
-            } catch (err) {
-              Alert.alert('Error', err.message);
-            }
-          },
-        },
-      ]
-    );
+    showConfirm({
+      title: 'Remove Member?',
+      description: `Remove ${member.name} (${member.productionRole}) from this Production Room? This action cannot be easily undone.`,
+      confirmLabel: 'Remove Member',
+      cancelLabel: 'Cancel',
+      isDestructive: true,
+      onConfirm: async () => {
+        try {
+          const roomRef = doc(db, 'rooms', roomId);
+          await updateDoc(roomRef, {
+            [`members.${member.uid}`]: deleteField(),
+            memberUids: arrayRemove(member.uid),
+          });
+          showToast({ type: 'info', message: `${member.name} removed from this room.` });
+        } catch (err) {
+          showToast({ type: 'error', message: err.message || 'Failed to remove person.' });
+        }
+      },
+    });
   };
 
   // Save changes to existing member's role or access
@@ -216,10 +216,10 @@ export default function RoomPeopleModal({ visible, roomId, roomData, onClose }) 
         [`members.${editingMember.uid}.productionRole`]: editProductionRole,
         [`members.${editingMember.uid}.roomAccess`]: editRoomAccess,
       });
-      Alert.alert('✓ Member Updated', `${editingMember.name}'s production role is now ${editProductionRole}.`);
+      showToast({ type: 'success', message: `${editingMember.name}'s role updated to ${editProductionRole}.` });
       setEditingMember(null);
     } catch (err) {
-      Alert.alert('Error', err.message);
+      showToast({ type: 'error', message: err.message || 'Failed to update member.' });
     }
   };
 
