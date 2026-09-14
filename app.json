@@ -12,9 +12,11 @@
       "backgroundColor": "#0c0d0e"
     },
     "ios": {
+      "bundleIdentifier": "com.ashy123.filmroom",
       "supportsTablet": true
     },
     "android": {
+      "package": "com.ashy123.filmroom",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#0c0d0e"
@@ -25,7 +27,8 @@
     },
     "plugins": [
       "@react-native-community/datetimepicker",
-      "expo-sqlite"
+      "expo-sqlite",
+      "expo-font"
     ],
     "extra": {
       "cloudinaryCloudName": "",
