@@ -114,7 +114,7 @@ export const checkUsernameAvailability = async (rawUsername) => {
       normalized: usernameLower,
     };
   } catch (err) {
-    if (__DEV__) {
+    if (typeof __DEV__ !== 'undefined' && __DEV__) {
       console.warn('[UsernameCheck] Firestore availability check failed:', err.message, err.code || '');
     }
     return {

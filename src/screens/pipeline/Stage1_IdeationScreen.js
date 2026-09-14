@@ -22,11 +22,20 @@ import StageProgressBar from '../../components/StageProgressBar';
 import BackButton from '../../components/BackButton';
 import RoomPeopleModal from '../../components/RoomPeopleModal';
 import EditRoomModal from '../../components/EditRoomModal';
+import RoomDetailsModal from '../../components/RoomDetailsModal';
 
-export default function Stage1_IdeationScreen({ navigation }) {
+export default function Stage1_IdeationScreen({ navigation, route }) {
   const { currentUser, userProfile } = useAuth();
-  const { activeRoomId, roomData, setProductionStage } = useRoom();
+  const { activeRoomId, roomData, setProductionStage, switchRoom } = useRoom();
   const { theme } = useTheme();
+
+  // Sync route param roomId with active room
+  useEffect(() => {
+    const targetRoomId = route?.params?.roomId;
+    if (targetRoomId && targetRoomId !== activeRoomId && switchRoom) {
+      switchRoom(targetRoomId);
+    }
+  }, [route?.params?.roomId, activeRoomId]);
 
   // Local state
   const [synopsis, setSynopsis] = useState('');
@@ -35,6 +44,7 @@ export default function Stage1_IdeationScreen({ navigation }) {
   const [isUploadingFile, setIsUploadingFile] = useState(false);
   const [isPeopleModalOpen, setIsPeopleModalOpen] = useState(false);
   const [isEditRoomModalOpen, setIsEditRoomModalOpen] = useState(false);
+  const [isRoomDetailsModalOpen, setIsRoomDetailsModalOpen] = useState(false);
 
   // Cloud Stage 1 State
   const [stageState, setStageState] = useState({
@@ -48,6 +58,15 @@ export default function Stage1_IdeationScreen({ navigation }) {
     roomData?.members?.[currentUser?.uid]?.roles ||
     userProfile?.roles ||
     [];
+
+  const userAccess =
+    roomData?.members?.[currentUser?.uid]?.roomAccess ||
+    (roomData?.creatorId === currentUser?.uid ? 'Owner' : 'Crew');
+
+  const canEditRoom =
+    roomData?.creatorId === currentUser?.uid ||
+    userAccess === 'Owner' ||
+    userAccess === 'Manager';
 
   const isDirector =
     userRoles.includes('Director') ||
@@ -261,15 +280,27 @@ export default function Stage1_IdeationScreen({ navigation }) {
             </Text>
           </View>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-            <TouchableOpacity
-              style={[styles.crewBadgeBtn, { backgroundColor: theme?.surface || '#121417', borderColor: theme?.cardBorder || '#242830' }]}
-              onPress={() => setIsEditRoomModalOpen(true)}
-              activeOpacity={0.8}
-            >
-              <Text style={[styles.crewBadgeText, { color: theme?.textSecondary || '#9ca3af' }]}>
-                ⚙️ Edit
-              </Text>
-            </TouchableOpacity>
+            {canEditRoom ? (
+              <TouchableOpacity
+                style={[styles.crewBadgeBtn, { backgroundColor: theme?.surface || '#121417', borderColor: theme?.cardBorder || '#242830' }]}
+                onPress={() => setIsEditRoomModalOpen(true)}
+                activeOpacity={0.8}
+              >
+                <Text style={[styles.crewBadgeText, { color: theme?.textSecondary || '#9ca3af' }]}>
+                  ⚙️ Edit
+                </Text>
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity
+                style={[styles.crewBadgeBtn, { backgroundColor: theme?.surface || '#121417', borderColor: theme?.cardBorder || '#242830' }]}
+                onPress={() => setIsRoomDetailsModalOpen(true)}
+                activeOpacity={0.8}
+              >
+                <Text style={[styles.crewBadgeText, { color: theme?.textSecondary || '#9ca3af' }]}>
+                  📋 Details
+                </Text>
+              </TouchableOpacity>
+            )}
 
             <TouchableOpacity
               style={[styles.crewBadgeBtn, { backgroundColor: theme?.surface || '#121417', borderColor: theme?.primary || '#f5a623' }]}
@@ -511,6 +542,13 @@ export default function Stage1_IdeationScreen({ navigation }) {
         roomId={activeRoomId}
         roomData={roomData}
         onClose={() => setIsEditRoomModalOpen(false)}
+      />
+
+      {/* View-Only Room Details Modal for unauthorized viewers */}
+      <RoomDetailsModal
+        visible={isRoomDetailsModalOpen}
+        roomData={roomData}
+        onClose={() => setIsRoomDetailsModalOpen(false)}
       />
     </View>
   );

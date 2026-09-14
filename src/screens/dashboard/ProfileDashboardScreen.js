@@ -29,6 +29,7 @@ import {
 import { SingleDatePickerField } from '../../components/CinemaDatePicker';
 import MediaUploadModal from '../../components/MediaUploadModal';
 import { useToast } from '../../context/ToastContext';
+import { deleteFromCloudinary, extractPublicIdFromUrl } from '../../services/cloudinaryService';
 
 export default function ProfileDashboardScreen({ navigation }) {
   const { currentUser, userProfile } = useAuth();
@@ -270,7 +271,7 @@ export default function ProfileDashboardScreen({ navigation }) {
 
   // Profile Photo Management
   const handleRemovePhoto = () => {
-    Alert.alert('Remove Photo', 'Are you sure you want to remove your profile photo?', [
+    Alert.alert('Remove Photo', 'Are you sure you want to remove your profile photo? It will also be deleted from Cloudinary.', [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Remove',
@@ -278,6 +279,16 @@ export default function ProfileDashboardScreen({ navigation }) {
         onPress: async () => {
           if (!currentUser) return;
           try {
+            // Delete from Cloudinary
+            const publicId =
+              userProfile?.photoMetadata?.publicId ||
+              extractPublicIdFromUrl(userProfile?.photoURL || currentUser?.photoURL);
+            const deleteToken = userProfile?.photoMetadata?.deleteToken;
+
+            if (publicId || deleteToken) {
+              await deleteFromCloudinary({ publicId, deleteToken, resourceType: 'image' });
+            }
+
             await updateDoc(doc(db, 'users', currentUser.uid), {
               photoURL: null,
               photoMetadata: null,
@@ -286,6 +297,7 @@ export default function ProfileDashboardScreen({ navigation }) {
               await updateProfile(auth.currentUser, { photoURL: null }).catch(() => {});
             }
             setIsPhotoModalOpen(false);
+            showToast({ type: 'success', message: 'Profile photo removed' });
           } catch (e) {
             Alert.alert('Error', e.message);
           }

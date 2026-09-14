@@ -1,12 +1,31 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
+import { streamUserApplicationForCall, REQUEST_STATUS } from '../services/contactRequestService';
+import ManageApplicationModal from './ManageApplicationModal';
 
 export default function ProductionCallCard({ project, onExpressInterest, onApply, onViewLead, onEditCall }) {
   const { theme } = useTheme();
   const { currentUser } = useAuth();
   const [showRequirements, setShowRequirements] = useState(false);
+  const [myApplication, setMyApplication] = useState(null);
+  const [isManageModalOpen, setIsManageModalOpen] = useState(false);
+
+  useEffect(() => {
+    if (!currentUser?.uid || !project?.id || (currentUser.uid && project.createdBy === currentUser.uid)) {
+      setMyApplication(null);
+      return;
+    }
+
+    const unsub = streamUserApplicationForCall(project.id, currentUser.uid, (app) => {
+      setMyApplication(app);
+    });
+
+    return () => unsub();
+  }, [project?.id, currentUser?.uid, project?.createdBy]);
+
+  if (!project) return null;
 
   const isOwner = currentUser?.uid && project.createdBy === currentUser.uid;
   const hasDetailedPositions = project.crewPositions && project.crewPositions.length > 0;
@@ -41,6 +60,55 @@ export default function ProductionCallCard({ project, onExpressInterest, onApply
               <Text style={styles.remoteText}>🌐 Remote Eligible</Text>
             </View>
           )}
+          {myApplication ? (
+            <View
+              style={[
+                styles.appliedTag,
+                {
+                  backgroundColor:
+                    myApplication.status === 'ACCEPTED'
+                      ? '#1e3d29'
+                      : myApplication.status === 'PENDING'
+                      ? '#2a2215'
+                      : myApplication.status === 'DECLINED'
+                      ? '#332020'
+                      : '#1e2430',
+                  borderColor:
+                    myApplication.status === 'ACCEPTED'
+                      ? '#4ade80'
+                      : myApplication.status === 'PENDING'
+                      ? '#f5a623'
+                      : myApplication.status === 'DECLINED'
+                      ? '#f87171'
+                      : '#64748b',
+                },
+              ]}
+            >
+              <Text
+                style={[
+                  styles.appliedTagText,
+                  {
+                    color:
+                      myApplication.status === 'ACCEPTED'
+                        ? '#4ade80'
+                        : myApplication.status === 'PENDING'
+                        ? '#f5a623'
+                        : myApplication.status === 'DECLINED'
+                        ? '#f87171'
+                        : '#94a3b8',
+                  },
+                ]}
+              >
+                {myApplication.status === 'ACCEPTED'
+                  ? '✓ Confirmed'
+                  : myApplication.status === 'PENDING'
+                  ? '✓ Applied • Pending'
+                  : myApplication.status === 'DECLINED'
+                  ? '✕ Declined'
+                  : '↩ Withdrawn'}
+              </Text>
+            </View>
+          ) : null}
         </View>
 
         <Text style={[styles.rateText, { color: theme.primary || '#f5a623' }]}>
@@ -166,6 +234,35 @@ export default function ProductionCallCard({ project, onExpressInterest, onApply
               ⚙️ Edit Call
             </Text>
           </TouchableOpacity>
+        ) : myApplication ? (
+          myApplication.status === 'PENDING' ? (
+            <TouchableOpacity
+              style={[styles.manageBtn, { backgroundColor: theme.surface || '#121417', borderColor: theme.primary || '#f5a623' }]}
+              onPress={() => setIsManageModalOpen(true)}
+            >
+              <Text style={[styles.manageBtnText, { color: theme.primary || '#f5a623' }]}>
+                Manage Application ➔
+              </Text>
+            </TouchableOpacity>
+          ) : myApplication.status === 'ACCEPTED' ? (
+            <TouchableOpacity
+              style={[styles.manageBtn, { backgroundColor: '#1e3d29', borderColor: '#4ade80' }]}
+              onPress={() => setIsManageModalOpen(true)}
+            >
+              <Text style={[styles.manageBtnText, { color: '#4ade80' }]}>
+                ✓ View Confirmation
+              </Text>
+            </TouchableOpacity>
+          ) : (
+            <TouchableOpacity
+              style={[styles.expressBtn, { backgroundColor: theme.primary || '#f5a623' }]}
+              onPress={() => setIsManageModalOpen(true)}
+            >
+              <Text style={[styles.expressText, { color: '#000000' }]}>
+                Reapply ➔
+              </Text>
+            </TouchableOpacity>
+          )
         ) : (
           <TouchableOpacity
             style={[styles.expressBtn, { backgroundColor: theme.primary || '#f5a623' }]}
@@ -177,6 +274,14 @@ export default function ProductionCallCard({ project, onExpressInterest, onApply
           </TouchableOpacity>
         )}
       </View>
+
+      <ManageApplicationModal
+        visible={isManageModalOpen}
+        application={myApplication}
+        callData={project}
+        onClose={() => setIsManageModalOpen(false)}
+        onApplicationUpdated={(app) => setMyApplication(app)}
+      />
     </View>
   );
 }
@@ -238,6 +343,29 @@ const styles = StyleSheet.create({
     color: '#93c5fd',
     fontSize: 10,
     fontWeight: '700',
+  },
+  appliedTag: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 4,
+    borderWidth: 1,
+  },
+  appliedTagText: {
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+  },
+  manageBtn: {
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  manageBtnText: {
+    fontSize: 12,
+    fontWeight: '800',
   },
   castingMetaRow: {
     flexDirection: 'row',

@@ -1,4 +1,5 @@
 import * as SQLite from 'expo-sqlite';
+import { formatBytes, clearDeviceCache } from './storageService';
 
 let dbInstance = null;
 const CURRENT_SCHEMA_VERSION = 1;
@@ -264,35 +265,57 @@ export async function getCachedSlateTakes(roomId) {
 
 /**
  * Retrieve database inspection statistics for Settings -> Storage & Data.
+ * Returns exact row counts across all local tables and calculates real on-disk footprint.
  */
 export async function getLocalDatabaseStats() {
   try {
     const db = await getLocalDatabase();
-    const roomsCount = await db.getFirstAsync('SELECT COUNT(*) as count FROM rooms;');
-    const callsCount = await db.getFirstAsync('SELECT COUNT(*) as count FROM crew_calls;');
-    const takesCount = await db.getFirstAsync('SELECT COUNT(*) as count FROM slate_takes;');
-    const queuePending = await db.getFirstAsync(
-      "SELECT COUNT(*) as count FROM sync_queue WHERE status = 'PENDING';"
-    );
-    const queueTotal = await db.getFirstAsync('SELECT COUNT(*) as count FROM sync_queue;');
+    const [
+      roomsCount,
+      callsCount,
+      takesCount,
+      notesCount,
+      sheetsCount,
+      queuePending,
+      queueTotal,
+    ] = await Promise.all([
+      db.getFirstAsync('SELECT COUNT(*) as count FROM rooms;').catch(() => ({ count: 0 })),
+      db.getFirstAsync('SELECT COUNT(*) as count FROM crew_calls;').catch(() => ({ count: 0 })),
+      db.getFirstAsync('SELECT COUNT(*) as count FROM slate_takes;').catch(() => ({ count: 0 })),
+      db.getFirstAsync('SELECT COUNT(*) as count FROM production_notes;').catch(() => ({ count: 0 })),
+      db.getFirstAsync('SELECT COUNT(*) as count FROM call_sheets;').catch(() => ({ count: 0 })),
+      db.getFirstAsync("SELECT COUNT(*) as count FROM sync_queue WHERE status = 'PENDING';").catch(() => ({ count: 0 })),
+      db.getFirstAsync('SELECT COUNT(*) as count FROM sync_queue;').catch(() => ({ count: 0 })),
+    ]);
 
     const totalRecords =
       (roomsCount?.count || 0) +
       (callsCount?.count || 0) +
       (takesCount?.count || 0) +
+      (notesCount?.count || 0) +
+      (sheetsCount?.count || 0) +
       (queueTotal?.count || 0);
 
-    // Approximate size in KB based on average record footprint
-    const estimatedKb = Math.max(24, Math.round(totalRecords * 1.8 + 16));
+    let actualBytes = 0;
+    try {
+      const pageCountRow = await db.getFirstAsync('PRAGMA page_count;');
+      const pageSizeRow = await db.getFirstAsync('PRAGMA page_size;');
+      const pageCount = pageCountRow?.page_count ?? Object.values(pageCountRow || {})[0] ?? 0;
+      const pageSize = pageSizeRow?.page_size ?? Object.values(pageSizeRow || {})[0] ?? 4096;
+      actualBytes = pageCount * pageSize;
+    } catch (_) {}
 
     return {
       schemaVersion: CURRENT_SCHEMA_VERSION,
       rooms: roomsCount?.count || 0,
       calls: callsCount?.count || 0,
       takes: takesCount?.count || 0,
+      notes: notesCount?.count || 0,
+      sheets: sheetsCount?.count || 0,
       pendingSync: queuePending?.count || 0,
       totalRecords,
-      estimatedSizeFormatted: estimatedKb > 1024 ? `${(estimatedKb / 1024).toFixed(1)} MB` : `${estimatedKb} KB`,
+      actualBytes,
+      estimatedSizeFormatted: formatBytes(actualBytes),
     };
   } catch (err) {
     return {
@@ -300,22 +323,37 @@ export async function getLocalDatabaseStats() {
       rooms: 0,
       calls: 0,
       takes: 0,
+      notes: 0,
+      sheets: 0,
       pendingSync: 0,
       totalRecords: 0,
-      estimatedSizeFormatted: '16 KB',
+      actualBytes: 0,
+      estimatedSizeFormatted: '0 B',
     };
   }
 }
 
 /**
  * Clears cached temporary documents and slate takes without clearing pending sync changes.
+ * Reclaims freed pages via VACUUM and clears disk cache.
  */
 export async function clearLocalCache() {
-  const db = await getLocalDatabase();
-  await db.runAsync('DELETE FROM rooms;');
-  await db.runAsync('DELETE FROM crew_calls;');
-  await db.runAsync('DELETE FROM slate_takes;');
-  await db.runAsync('DELETE FROM production_notes;');
-  await db.runAsync('DELETE FROM call_sheets;');
+  try {
+    const db = await getLocalDatabase();
+    await db.runAsync('DELETE FROM rooms;');
+    await db.runAsync('DELETE FROM crew_calls;');
+    await db.runAsync('DELETE FROM slate_takes;');
+    await db.runAsync('DELETE FROM production_notes;');
+    await db.runAsync('DELETE FROM call_sheets;');
+    try {
+      await db.execAsync('VACUUM;');
+    } catch (_) {}
+  } catch (_) {}
+
+  // Also purge temporary disk cache
+  try {
+    await clearDeviceCache();
+  } catch (_) {}
+
   return true;
 }

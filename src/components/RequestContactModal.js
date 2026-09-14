@@ -11,10 +11,14 @@ import {
   ActivityIndicator,
   Pressable,
 } from 'react-native';
+import { collection, query, where, getDocs } from 'firebase/firestore';
+import { db } from '../../firebaseConfig';
 import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
 import { submitContactRequest, REQUEST_TYPES } from '../services/contactRequestService';
 import { ACTOR_ROLE_POSITIONS } from './PostProductionCallModal';
+import { CORE_PROFESSIONAL_ROLES } from '../config/rolesConfig';
+import FilmRoomDropdown from './FilmRoomDropdown';
 
 const PRODUCTION_TYPES = [
   'Feature Film',
@@ -44,6 +48,34 @@ export default function RequestContactModal({ visible, targetTalent, onClose, on
   const [materialLink, setMaterialLink] = useState('');
   const [message, setMessage] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [userProjects, setUserProjects] = useState([]);
+  const [loadingProjects, setLoadingProjects] = useState(false);
+
+  // Fetch current user's active and inactive projects (excluding completed & archived)
+  useEffect(() => {
+    if (visible && currentUser?.uid) {
+      setLoadingProjects(true);
+      const q = query(
+        collection(db, 'rooms'),
+        where('memberUids', 'array-contains', currentUser.uid)
+      );
+      getDocs(q)
+        .then((snap) => {
+          const eligible = snap.docs
+            .map((d) => ({ id: d.id, ...d.data() }))
+            .filter((r) => r && r.status !== 'COMPLETED' && r.status !== 'ARCHIVED');
+          setUserProjects(eligible);
+          if (eligible.length > 0 && !projectName) {
+            setProjectName(eligible[0].title || '');
+            if (eligible[0].projectType) setProductionType(eligible[0].projectType);
+          }
+        })
+        .catch((err) => {
+          console.warn('Error fetching user projects for inquiry:', err.message);
+        })
+        .finally(() => setLoadingProjects(false));
+    }
+  }, [visible, currentUser?.uid]);
 
   useEffect(() => {
     if (visible && targetTalent) {
@@ -52,9 +84,7 @@ export default function RequestContactModal({ visible, targetTalent, onClose, on
         targetTalent?.role?.toLowerCase()?.includes('actor') ||
         targetTalent?.roles?.some?.((r) => r?.toLowerCase()?.includes('actor'));
       setInquiryCategory(isActor ? 'CASTING' : 'CREW');
-      setProjectName('');
-      setProductionType('Feature Film');
-      setRoleName('');
+      setRoleName(targetTalent?.primaryRole || targetTalent?.role || '');
       setCharacterName('');
       setRolePosition('Main Actor / Lead');
       setCharacterDescription('');
@@ -75,7 +105,7 @@ export default function RequestContactModal({ visible, targetTalent, onClose, on
 
   const handleSubmit = async () => {
     if (!projectName.trim()) {
-      Alert.alert('Required Field', 'Please provide a project name.');
+      showToast({ type: 'warning', message: 'Please select or enter a project title.' });
       return;
     }
 
@@ -85,11 +115,11 @@ export default function RequestContactModal({ visible, targetTalent, onClose, on
       : roleName.trim();
 
     if (!activeRole) {
-      Alert.alert('Required Field', isCasting ? 'Please specify the character / role name.' : 'Please specify the role or position.');
+      showToast({ type: 'warning', message: isCasting ? 'Please specify the character / role name.' : 'Please select or enter the craft role needed.' });
       return;
     }
     if (!message.trim()) {
-      Alert.alert('Required Field', 'Please include a brief professional message.');
+      showToast({ type: 'warning', message: 'Please include a brief professional message.' });
       return;
     }
 
@@ -233,17 +263,32 @@ export default function RequestContactModal({ visible, targetTalent, onClose, on
               </TouchableOpacity>
             </View>
 
-            {/* Project Title */}
-            <Text style={[styles.label, { color: theme.textSecondary, marginTop: 12 }]}>PROJECT TITLE *</Text>
-            <TextInput
-              style={[
-                styles.input,
-                { backgroundColor: theme.surface, color: theme.text, borderColor: theme.cardBorder },
-              ]}
-              placeholder="e.g. Midnight Horizon, Season 2"
-              placeholderTextColor={theme.textMuted}
-              value={projectName}
-              onChangeText={setProjectName}
+            {/* Project Title Controlled Dropdown */}
+            <FilmRoomDropdown
+              label="Project Title *"
+              options={userProjects.map((p) => ({
+                label: p.title || 'Untitled Project',
+                value: p.title || 'Untitled Project',
+                icon: '🎬',
+                description: `${p.genre || 'Production'} • Status: ${p.status || 'ACTIVE'}`,
+              }))}
+              selectedValue={projectName}
+              onSelect={(val) => {
+                setProjectName(val);
+                const matched = userProjects.find((p) => p.title === val);
+                if (matched && matched.projectType) {
+                  setProductionType(matched.projectType);
+                }
+              }}
+              placeholder={
+                loadingProjects
+                  ? 'Loading your productions...'
+                  : userProjects.length > 0
+                  ? 'Select from your FilmRoom projects...'
+                  : 'Enter or select project title...'
+              }
+              allowCustom={true}
+              customPlaceholder="Enter custom / new project title..."
             />
 
             {/* Production Type */}
@@ -383,30 +428,40 @@ export default function RequestContactModal({ visible, targetTalent, onClose, on
               </>
             ) : (
               <>
-                <Text style={[styles.label, { color: theme.textSecondary, marginTop: 12 }]}>
-                  ROLE / CRAFT NEEDED *
-                </Text>
-                <TextInput
-                  style={[
-                    styles.input,
-                    { backgroundColor: theme.surface, color: theme.text, borderColor: theme.cardBorder },
-                  ]}
-                  placeholder="e.g. Lead Actor (Det. Miller), Cinematographer (A-Cam)"
-                  placeholderTextColor={theme.textMuted}
-                  value={roleName}
-                  onChangeText={setRoleName}
+                {/* Controlled Role Dropdown with custom option */}
+                <FilmRoomDropdown
+                  label="Role / Craft Needed *"
+                  options={CORE_PROFESSIONAL_ROLES.map((r) => ({
+                    label: r.label,
+                    value: r.label,
+                    icon: r.icon,
+                    description: `Department: ${r.department}`,
+                  }))}
+                  selectedValue={roleName}
+                  onSelect={(val) => setRoleName(val)}
+                  placeholder="Select craft role..."
+                  allowCustom={true}
+                  customPlaceholder="Specify custom craft or position..."
                 />
               </>
             )}
 
-            {/* Projected Shoot Dates Range */}
+            {/* Projected Shoot Dates Range with To Date >= From Date validation */}
             <DateRangePickerField
               label="Projected Shoot Window (Optional)"
               startDate={shootStartDate}
               endDate={shootEndDate}
               onChangeRange={({ startDate: s, endDate: e }) => {
-                setShootStartDate(s);
-                setShootEndDate(e);
+                if (s && e) {
+                  const d1 = new Date(s);
+                  const d2 = new Date(e);
+                  if (d2 < d1) {
+                    showToast({ type: 'warning', message: 'To Date must be on or after From Date.' });
+                    return;
+                  }
+                }
+                if (s !== undefined) setShootStartDate(s);
+                if (e !== undefined) setShootEndDate(e);
               }}
             />
 

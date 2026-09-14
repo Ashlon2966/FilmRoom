@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -6,25 +6,33 @@ import {
   Modal,
   TouchableOpacity,
   ScrollView,
-  Alert,
   TextInput,
   Switch,
   ActivityIndicator,
 } from 'react-native';
 import { useTheme } from '../../context/ThemeContext';
+import { useModal } from '../../context/ModalContext';
+import { useAuth } from '../../context/AuthContext';
+import { useToast } from '../../context/ToastContext';
 import {
   CLOUDINARY_CONFIG,
   resolveCloudinaryConfig,
-  getCloudinaryStatus,
   setCustomCloudinaryConfig,
   resetCustomCloudinaryConfig,
   initCloudinaryConfig,
   isPlaceholderValue,
 } from '../../config/cloudinaryConfig';
 import { testCloudinaryConnection } from '../../services/cloudinaryService';
-import { getLocalDatabaseStats, clearLocalCache } from '../../services/localDatabaseService';
+import {
+  getLocalDatabaseStats,
+  clearLocalCache,
+  getCachedRooms,
+} from '../../services/localDatabaseService';
 import { getPendingQueueCount } from '../../services/syncService';
-import { useToast } from '../../context/ToastContext';
+import {
+  getFullStorageBreakdown,
+  clearDeviceCache,
+} from '../../services/storageService';
 
 const DEFAULT_STORAGE_PREFS = {
   autoPurgeCache: false,
@@ -34,16 +42,22 @@ const DEFAULT_STORAGE_PREFS = {
 
 export default function StorageDataModal({ visible, onClose }) {
   const { theme } = useTheme();
+  const { showConfirm, showAlert } = useModal();
+  const { currentUser, userProfile } = useAuth();
   const { showToast } = useToast();
 
-  const [cacheSize, setCacheSize] = useState('0 KB');
+  const [loadingStorage, setLoadingStorage] = useState(false);
+  const [storageData, setStorageData] = useState(null);
+
   const [dbStats, setDbStats] = useState({
     rooms: 0,
     calls: 0,
     takes: 0,
+    notes: 0,
+    sheets: 0,
     pendingSync: 0,
     totalRecords: 0,
-    estimatedSizeFormatted: '16 KB',
+    estimatedSizeFormatted: '0 B',
   });
 
   // Cloudinary credentials state
@@ -58,12 +72,32 @@ export default function StorageDataModal({ visible, onClose }) {
   const [savedPrefs, setSavedPrefs] = useState(DEFAULT_STORAGE_PREFS);
   const [draftPrefs, setDraftPrefs] = useState(DEFAULT_STORAGE_PREFS);
 
-  const refreshStats = async () => {
-    const stats = await getLocalDatabaseStats();
-    const pending = await getPendingQueueCount();
-    setDbStats({ ...stats, pendingSync: pending });
-    setCacheSize(stats.estimatedSizeFormatted);
-  };
+  const refreshAllStorage = useCallback(async () => {
+    setLoadingStorage(true);
+    try {
+      // 1. Fetch cached rooms to calculate linked documents and room media
+      const cachedRooms = await getCachedRooms().catch(() => []);
+
+      // 2. Perform full real storage calculation
+      const breakdown = await getFullStorageBreakdown({
+        currentUser,
+        userProfile,
+        rooms: cachedRooms,
+      });
+      setStorageData(breakdown);
+
+      // 3. Query local database statistics
+      const [stats, pending] = await Promise.all([
+        getLocalDatabaseStats().catch(() => ({})),
+        getPendingQueueCount().catch(() => 0),
+      ]);
+      setDbStats({ ...stats, pendingSync: pending });
+    } catch (err) {
+      console.warn('Storage calculation warning:', err);
+    } finally {
+      setLoadingStorage(false);
+    }
+  }, [currentUser, userProfile]);
 
   useEffect(() => {
     if (visible) {
@@ -80,28 +114,31 @@ export default function StorageDataModal({ visible, onClose }) {
           setActiveConfig(null);
         }
       });
-      refreshStats();
+      refreshAllStorage();
       setDraftPrefs(savedPrefs);
     }
-  }, [visible]);
+  }, [visible, refreshAllStorage]);
 
-  const handleClearCache = () => {
-    Alert.alert(
-      'Clear Application Cache',
-      'This will clear local temporary caches. Un-synchronized changes and cloud data remain safe.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Clear Cache',
-          style: 'destructive',
-          onPress: async () => {
-            await clearLocalCache();
-            await refreshStats();
-            showToast({ type: 'info', message: 'Temporary cache cleared' });
-          },
-        },
-      ]
-    );
+  const handleClearCache = async () => {
+    const confirmed = await showConfirm({
+      title: 'Clear Application Cache',
+      message:
+        'This will purge local temporary files, picker caches, and image cache. Your offline database, room drafts, and cloud data remain completely safe.',
+      confirmText: 'Clear Cache',
+      cancelText: 'Cancel',
+      isDestructive: true,
+    });
+
+    if (confirmed) {
+      try {
+        await clearDeviceCache();
+        await clearLocalCache();
+        await refreshAllStorage();
+        showToast({ type: 'info', message: 'Temporary cache cleared' });
+      } catch (err) {
+        showToast({ type: 'error', message: 'Failed to clear cache: ' + err.message });
+      }
+    }
   };
 
   const handleSaveCloudinary = async () => {
@@ -109,18 +146,19 @@ export default function StorageDataModal({ visible, onClose }) {
     const trimmedPreset = uploadPreset.trim();
 
     if (!trimmedCloud || !trimmedPreset) {
-      Alert.alert(
-        'Missing Information',
-        'Please enter both your Cloud Name and Unsigned Upload Preset.'
-      );
+      await showAlert({
+        title: 'Missing Information',
+        message: 'Please enter both your Cloud Name and Unsigned Upload Preset.',
+      });
       return;
     }
 
     if (isPlaceholderValue(trimmedCloud) || isPlaceholderValue(trimmedPreset)) {
-      Alert.alert(
-        'Invalid Credentials',
-        'Please enter your actual Cloudinary credentials. Placeholder values like "filmroom_media" cannot be saved.'
-      );
+      await showAlert({
+        title: 'Invalid Credentials',
+        message:
+          'Please enter your actual Cloudinary credentials. Placeholder values like "filmroom_media" cannot be saved.',
+      });
       return;
     }
 
@@ -129,6 +167,7 @@ export default function StorageDataModal({ visible, onClose }) {
       const resolved = await setCustomCloudinaryConfig(trimmedCloud, trimmedPreset);
       setIsCloudinaryConfigured(resolved.configured);
       setActiveConfig(resolved);
+      await refreshAllStorage();
       showToast({ type: 'success', message: 'Cloudinary configuration saved' });
     } catch (e) {
       showToast({ type: 'error', message: e.message || 'Failed to save configuration.' });
@@ -142,18 +181,18 @@ export default function StorageDataModal({ visible, onClose }) {
     const targetPreset = uploadPreset.trim();
 
     if (!targetCloud || !targetPreset) {
-      Alert.alert(
-        'Credentials Required',
-        'Please enter your Cloud Name and Unsigned Upload Preset to test connection.'
-      );
+      await showAlert({
+        title: 'Credentials Required',
+        message: 'Please enter your Cloud Name and Unsigned Upload Preset to test connection.',
+      });
       return;
     }
 
     if (isPlaceholderValue(targetCloud) || isPlaceholderValue(targetPreset)) {
-      Alert.alert(
-        'Invalid Credentials',
-        'Placeholder values cannot be tested. Enter your actual Cloudinary credentials.'
-      );
+      await showAlert({
+        title: 'Invalid Credentials',
+        message: 'Placeholder values cannot be tested. Enter your actual Cloudinary credentials.',
+      });
       return;
     }
 
@@ -177,25 +216,24 @@ export default function StorageDataModal({ visible, onClose }) {
   };
 
   const handleResetCloudinary = async () => {
-    Alert.alert(
-      'Clear Cloudinary Configuration',
-      'Remove saved Cloudinary credentials from this device? Uploads will be paused until credentials are configured again.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Clear Configuration',
-          style: 'destructive',
-          onPress: async () => {
-            const resolved = await resetCustomCloudinaryConfig();
-            setCloudName(resolved.cloudName || '');
-            setUploadPreset(resolved.uploadPreset || '');
-            setIsCloudinaryConfigured(resolved.configured);
-            setActiveConfig(resolved.configured ? resolved : null);
-            showToast({ type: 'info', message: 'Cloudinary configuration removed' });
-          },
-        },
-      ]
-    );
+    const confirmed = await showConfirm({
+      title: 'Clear Cloudinary Configuration',
+      message:
+        'Remove saved Cloudinary credentials from this device? Uploads will be paused until credentials are configured again.',
+      confirmText: 'Clear Configuration',
+      cancelText: 'Cancel',
+      isDestructive: true,
+    });
+
+    if (confirmed) {
+      const resolved = await resetCustomCloudinaryConfig();
+      setCloudName(resolved.cloudName || '');
+      setUploadPreset(resolved.uploadPreset || '');
+      setIsCloudinaryConfigured(resolved.configured);
+      setActiveConfig(resolved.configured ? resolved : null);
+      await refreshAllStorage();
+      showToast({ type: 'info', message: 'Cloudinary configuration removed' });
+    }
   };
 
   const handleSaveChanges = () => {
@@ -214,6 +252,36 @@ export default function StorageDataModal({ visible, onClose }) {
     showToast({ type: 'info', message: 'Storage preferences reset to defaults' });
   };
 
+  const device = storageData?.device || {
+    photos: { formatted: '0 B', count: 0 },
+    videos: { formatted: '0 B', count: 0 },
+    documents: { formatted: '0 B', count: 0 },
+    other: { formatted: '0 B', count: 0 },
+    offlineData: { formatted: '0 B', sqlite: '0 B', asyncStorage: '0 B', keyCount: 0 },
+    cache: { formatted: '0 B', fileCount: 0 },
+    totalFormatted: '0 B',
+  };
+
+  const cloudinary = storageData?.cloudinary || {
+    isConfigured: isCloudinaryConfigured,
+    photoCount: 0,
+    videoCount: 0,
+    totalAssets: 0,
+    trackedBytesFormatted: '0 B',
+    statusBadge: isCloudinaryConfigured ? 'Configured (Client Unsigned)' : 'Not Configured',
+    accountQuota: 'Unavailable (Client-safe mode)',
+    quotaNote:
+      'Account-level quota requires the Cloudinary Admin API Secret (Basic Auth), which is never embedded on client devices.',
+  };
+
+  const drive = storageData?.drive || {
+    statusLabel: 'Not Connected (External Link Mode)',
+    linkedDocumentsCount: 0,
+    usedFormatted: '0 B (Local)',
+    quotaStatus: 'Unavailable (Not Connected)',
+    note: 'Google Drive files are referenced via external web links and do not consume local device storage.',
+  };
+
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
       <View style={styles.overlay}>
@@ -223,7 +291,7 @@ export default function StorageDataModal({ visible, onClose }) {
             <View>
               <Text style={[styles.title, { color: theme.text }]}>STORAGE & DATA</Text>
               <Text style={[styles.subtitle, { color: theme.textSecondary }]}>
-                Local offline database, media & Cloudinary setup
+                Real device memory, remote cloud media & storage management
               </Text>
             </View>
             <TouchableOpacity onPress={handleCancel} style={styles.closeBtn}>
@@ -231,8 +299,175 @@ export default function StorageDataModal({ visible, onClose }) {
             </TouchableOpacity>
           </View>
 
+          {/* Refresh & Calculation Timestamp Bar */}
+          <View style={[styles.timestampBar, { backgroundColor: theme.background, borderColor: theme.cardBorder }]}>
+            <View style={styles.timestampInfo}>
+              <Text style={[styles.timestampLabel, { color: theme.textSecondary }]}>
+                {loadingStorage ? 'Calculating real storage...' : `Calculated: ${storageData?.calculatedAt || 'Just now'}`}
+              </Text>
+              <Text style={[styles.timestampNote, { color: theme.textMuted }]}>
+                Dynamic hardware scan • Zero estimates
+              </Text>
+            </View>
+            <TouchableOpacity
+              style={[styles.refreshBtn, { borderColor: theme.cardBorder, backgroundColor: theme.surface }]}
+              onPress={refreshAllStorage}
+              disabled={loadingStorage}
+              activeOpacity={0.7}
+            >
+              {loadingStorage ? (
+                <ActivityIndicator size="small" color={theme.primary} />
+              ) : (
+                <Text style={[styles.refreshBtnText, { color: theme.primary }]}>↺ Refresh</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+
           <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
-            {/* Overview Summary Card */}
+            {/* ============================================================ */}
+            {/* 1. OVERALL STORAGE SUMMARY (Honest Separation of Local & Cloud) */}
+            {/* ============================================================ */}
+            <View style={styles.sectionHeaderRow}>
+              <Text style={[styles.sectionHeading, { color: theme.textSecondary }]}>OVERALL DATA SUMMARY</Text>
+              <View style={[styles.miniBadge, { backgroundColor: '#1e293b', borderColor: '#334155' }]}>
+                <Text style={[styles.miniBadgeText, { color: '#94a3b8' }]}>Real-Time</Text>
+              </View>
+            </View>
+
+            <View style={[styles.summaryCard, { backgroundColor: theme.background, borderColor: theme.cardBorder }]}>
+              <View style={styles.summaryRow}>
+                {/* Physical Device Box */}
+                <View style={[styles.summaryBox, { borderColor: theme.cardBorder, backgroundColor: theme.surface }]}>
+                  <Text style={styles.summaryIcon}>📱</Text>
+                  <Text style={[styles.summaryBoxTitle, { color: theme.textSecondary }]}>LOCAL DEVICE</Text>
+                  <Text style={[styles.summaryBoxValue, { color: theme.primary }]}>{device.totalFormatted}</Text>
+                  <Text style={[styles.summaryBoxSub, { color: theme.textMuted }]}>Physical Disk Space</Text>
+                </View>
+
+                {/* Cloudinary Remote Box */}
+                <View style={[styles.summaryBox, { borderColor: theme.cardBorder, backgroundColor: theme.surface }]}>
+                  <Text style={styles.summaryIcon}>☁️</Text>
+                  <Text style={[styles.summaryBoxTitle, { color: theme.textSecondary }]}>CLOUDINARY</Text>
+                  <Text style={[styles.summaryBoxValue, { color: theme.text }]}>{cloudinary.trackedBytesFormatted}</Text>
+                  <Text style={[styles.summaryBoxSub, { color: theme.textMuted }]}>
+                    {cloudinary.totalAssets} Remote Assets
+                  </Text>
+                </View>
+
+                {/* Drive Remote Box */}
+                <View style={[styles.summaryBox, { borderColor: theme.cardBorder, backgroundColor: theme.surface }]}>
+                  <Text style={styles.summaryIcon}>📁</Text>
+                  <Text style={[styles.summaryBoxTitle, { color: theme.textSecondary }]}>GOOGLE DRIVE</Text>
+                  <Text style={[styles.summaryBoxValue, { color: theme.text }]}>{drive.usedFormatted}</Text>
+                  <Text style={[styles.summaryBoxSub, { color: theme.textMuted }]}>
+                    {drive.linkedDocumentsCount} Linked Docs
+                  </Text>
+                </View>
+              </View>
+
+              {/* Explanatory Caption */}
+              <View style={[styles.captionBox, { backgroundColor: theme.surface, borderColor: theme.cardBorder }]}>
+                <Text style={[styles.captionText, { color: theme.textSecondary }]}>
+                  ℹ️ Only <Text style={{ color: theme.primary, fontWeight: '700' }}>Local Device</Text> storage consumes physical memory on this device. Remote media (Cloudinary) and linked files (Google Drive) are stored on external cloud infrastructure and do not reduce your available phone storage.
+                </Text>
+              </View>
+            </View>
+
+            {/* ============================================================ */}
+            {/* 2. REAL DEVICE STORAGE BREAKDOWN                             */}
+            {/* ============================================================ */}
+            <View style={styles.sectionHeaderRow}>
+              <Text style={[styles.sectionHeading, { color: theme.textSecondary }]}>
+                DEVICE STORAGE (PHYSICAL MEMORY)
+              </Text>
+              <View style={[styles.miniBadge, { backgroundColor: '#052e16', borderColor: '#22c55e' }]}>
+                <Text style={[styles.miniBadgeText, { color: '#4ade80' }]}>On-Device</Text>
+              </View>
+            </View>
+
+            <View style={[styles.breakdownCard, { backgroundColor: theme.background, borderColor: theme.cardBorder }]}>
+              {/* Photos */}
+              <View style={styles.breakdownRow}>
+                <View style={styles.breakdownLabelGroup}>
+                  <Text style={[styles.itemLabel, { color: theme.text }]}>🖼 Photos</Text>
+                  <Text style={[styles.itemCountText, { color: theme.textMuted }]}>
+                    {device.photos.count} {device.photos.count === 1 ? 'file' : 'files'}
+                  </Text>
+                </View>
+                <Text style={[styles.itemValue, { color: theme.text }]}>{device.photos.formatted}</Text>
+              </View>
+              <View style={styles.divider} />
+
+              {/* Videos */}
+              <View style={styles.breakdownRow}>
+                <View style={styles.breakdownLabelGroup}>
+                  <Text style={[styles.itemLabel, { color: theme.text }]}>🎬 Videos</Text>
+                  <Text style={[styles.itemCountText, { color: theme.textMuted }]}>
+                    {device.videos.count} {device.videos.count === 1 ? 'file' : 'files'}
+                  </Text>
+                </View>
+                <Text style={[styles.itemValue, { color: theme.text }]}>{device.videos.formatted}</Text>
+              </View>
+              <View style={styles.divider} />
+
+              {/* Documents */}
+              <View style={styles.breakdownRow}>
+                <View style={styles.breakdownLabelGroup}>
+                  <Text style={[styles.itemLabel, { color: theme.text }]}>📄 Documents & Exports</Text>
+                  <Text style={[styles.itemCountText, { color: theme.textMuted }]}>
+                    {device.documents.count} {device.documents.count === 1 ? 'file' : 'files'} (.pdf, .filmroom, .json, .txt, .xlsx)
+                  </Text>
+                </View>
+                <Text style={[styles.itemValue, { color: theme.text }]}>{device.documents.formatted}</Text>
+              </View>
+              <View style={styles.divider} />
+
+              {/* Offline Database */}
+              <View style={styles.breakdownRow}>
+                <View style={styles.breakdownLabelGroup}>
+                  <Text style={[styles.itemLabel, { color: theme.text }]}>💾 Offline Data</Text>
+                  <Text style={[styles.itemCountText, { color: theme.textMuted }]}>
+                    SQLite ({device.offlineData.sqlite}) • AsyncStorage ({device.offlineData.asyncStorage})
+                  </Text>
+                </View>
+                <Text style={[styles.itemValue, { color: theme.text }]}>{device.offlineData.formatted}</Text>
+              </View>
+              <View style={styles.divider} />
+
+              {/* Temporary Cache */}
+              <View style={styles.breakdownRow}>
+                <View style={styles.breakdownLabelGroup}>
+                  <Text style={[styles.itemLabel, { color: theme.text }]}>⚡ Cache</Text>
+                  <Text style={[styles.itemCountText, { color: theme.textMuted }]}>
+                    {device.cache.fileCount} temporary picker & network cached items
+                  </Text>
+                </View>
+                <Text style={[styles.itemValue, { color: theme.text }]}>{device.cache.formatted}</Text>
+              </View>
+              <View style={styles.divider} />
+
+              {/* Total Physical On Device */}
+              <View style={[styles.breakdownRow, { paddingTop: 14 }]}>
+                <View>
+                  <Text style={[styles.totalLabel, { color: theme.text }]}>TOTAL ON DEVICE</Text>
+                  <Text style={[styles.itemCountText, { color: theme.textMuted }]}>
+                    Actual physical memory consumed on phone
+                  </Text>
+                </View>
+                <Text style={[styles.totalValue, { color: theme.primary }]}>{device.totalFormatted}</Text>
+              </View>
+            </View>
+
+            {/* Quick Cache Purge Button */}
+            <TouchableOpacity
+              style={[styles.dangerBtn, { borderColor: theme.cardBorder, marginBottom: 16 }]}
+              onPress={handleClearCache}
+              activeOpacity={0.7}
+            >
+              <Text style={[styles.dangerBtnText, { color: '#ef4444' }]}>🗑 Clear Temporary Cache</Text>
+            </TouchableOpacity>
+
+            {/* Local Database Inspection Cards */}
             <View style={[styles.summaryCard, { backgroundColor: theme.background, borderColor: theme.cardBorder }]}>
               <View style={styles.statRow}>
                 <View style={styles.statCol}>
@@ -254,23 +489,38 @@ export default function StorageDataModal({ visible, onClose }) {
               <View style={styles.actionRow}>
                 <TouchableOpacity
                   style={[styles.outlineBtn, { borderColor: theme.cardBorder, flex: 1, marginRight: 6 }]}
-                  onPress={() => Alert.alert('Offline Data', 'Local working layer stores offline drafts, call sheets, and circle takes.')}
+                  onPress={() =>
+                    showAlert({
+                      title: 'Local Database Inspection',
+                      message: `Tables stored locally in SQLite:\n• Rooms: ${dbStats.rooms || 0}\n• Crew Calls: ${dbStats.calls || 0}\n• Slate Takes: ${dbStats.takes || 0}\n• Production Notes: ${dbStats.notes || 0}\n• Call Sheets: ${dbStats.sheets || 0}\n• Pending Sync: ${dbStats.pendingSync || 0}`,
+                    })
+                  }
                 >
-                  <Text style={[styles.outlineBtnText, { color: theme.text }]}>Manage Offline Data</Text>
+                  <Text style={[styles.outlineBtnText, { color: theme.text }]}>Inspect Tables</Text>
                 </TouchableOpacity>
 
                 <TouchableOpacity
                   style={[styles.outlineBtn, { borderColor: theme.cardBorder, flex: 1, marginLeft: 6 }]}
-                  onPress={() => Alert.alert('Export to Device', 'Preparing local database package export...')}
+                  onPress={() =>
+                    showAlert({
+                      title: 'Export Local Package',
+                      message:
+                        'To export local production data and call sheets, visit Settings → Import & Export to create a .filmroom backup.',
+                    })
+                  }
                 >
-                  <Text style={[styles.outlineBtnText, { color: theme.text }]}>Export to Device</Text>
+                  <Text style={[styles.outlineBtnText, { color: theme.text }]}>Export Package</Text>
                 </TouchableOpacity>
               </View>
             </View>
 
-            {/* CLOUDINARY MEDIA SETUP */}
+            {/* ============================================================ */}
+            {/* 3. REAL CLOUDINARY STORAGE (REMOTE / CLOUD)                  */}
+            {/* ============================================================ */}
             <View style={styles.sectionHeaderRow}>
-              <Text style={[styles.sectionHeading, { color: theme.textSecondary }]}>CLOUDINARY MEDIA CONFIGURATION</Text>
+              <Text style={[styles.sectionHeading, { color: theme.textSecondary }]}>
+                CLOUDINARY MEDIA CONFIGURATION
+              </Text>
               <View
                 style={[
                   styles.statusBadge,
@@ -286,20 +536,26 @@ export default function StorageDataModal({ visible, onClose }) {
                     { color: isCloudinaryConfigured ? '#4ade80' : '#fbbf24' },
                   ]}
                 >
-                  {isCloudinaryConfigured ? '✓ Cloudinary Configured' : '○ Cloudinary Not Configured'}
+                  {isCloudinaryConfigured ? '✓ Configured (Client Unsigned)' : '○ Not Configured'}
                 </Text>
               </View>
             </View>
 
             <View style={[styles.configCard, { backgroundColor: theme.surface, borderColor: theme.cardBorder }]}>
               {/* Safe Client Warning */}
-              <View style={[styles.securityNoticeBox, { backgroundColor: theme.background, borderColor: theme.cardBorder }]}>
+              <View
+                style={[
+                  styles.securityNoticeBox,
+                  { backgroundColor: theme.background, borderColor: theme.cardBorder },
+                ]}
+              >
                 <Text style={styles.securityNoticeIcon}>🔒</Text>
                 <Text style={[styles.securityNoticeText, { color: theme.textSecondary }]}>
-                  Cloud Name and unsigned upload preset are safe for client-side unsigned uploads. Never enter your Cloudinary API Secret here.
+                  Cloud Name and unsigned upload preset are configured for client-side uploads. Your Cloudinary API Secret is never embedded in this app.
                 </Text>
               </View>
 
+              {/* Active Configuration Box */}
               {isCloudinaryConfigured && activeConfig ? (
                 <View style={[styles.activeConfigBox, { backgroundColor: theme.background, borderColor: '#22c55e33' }]}>
                   <Text style={[styles.activeConfigHeader, { color: '#4ade80' }]}>Active Configuration</Text>
@@ -314,9 +570,43 @@ export default function StorageDataModal({ visible, onClose }) {
                 </View>
               ) : null}
 
-              <Text style={[styles.inputLabel, { color: theme.textSecondary, marginTop: 10 }]}>CLOUD NAME</Text>
+              {/* Tracked Media Uploads Box */}
+              <View style={[styles.mediaUsageCard, { backgroundColor: theme.background, borderColor: theme.cardBorder }]}>
+                <Text style={[styles.mediaUsageTitle, { color: theme.text }]}>FilmRoom Managed Media</Text>
+                <View style={styles.mediaUsageRow}>
+                  <View style={styles.mediaUsageCol}>
+                    <Text style={[styles.mediaUsageLabel, { color: theme.textSecondary }]}>PHOTOS</Text>
+                    <Text style={[styles.mediaUsageValue, { color: theme.text }]}>{cloudinary.photoCount}</Text>
+                  </View>
+                  <View style={styles.mediaUsageCol}>
+                    <Text style={[styles.mediaUsageLabel, { color: theme.textSecondary }]}>VIDEOS</Text>
+                    <Text style={[styles.mediaUsageValue, { color: theme.text }]}>{cloudinary.videoCount}</Text>
+                  </View>
+                  <View style={styles.mediaUsageCol}>
+                    <Text style={[styles.mediaUsageLabel, { color: theme.textSecondary }]}>TRACKED</Text>
+                    <Text style={[styles.mediaUsageValue, { color: theme.primary }]}>
+                      {cloudinary.trackedBytesFormatted}
+                    </Text>
+                  </View>
+                </View>
+              </View>
+
+              {/* Provider Account Quota */}
+              <View style={[styles.quotaBox, { backgroundColor: theme.background, borderColor: theme.cardBorder }]}>
+                <View style={styles.quotaHeaderRow}>
+                  <Text style={[styles.quotaLabel, { color: theme.textSecondary }]}>PROVIDER ACCOUNT QUOTA</Text>
+                  <Text style={[styles.quotaValue, { color: theme.textMuted }]}>{cloudinary.accountQuota}</Text>
+                </View>
+                <Text style={[styles.quotaNoteText, { color: theme.textMuted }]}>{cloudinary.quotaNote}</Text>
+              </View>
+
+              {/* Form Inputs */}
+              <Text style={[styles.inputLabel, { color: theme.textSecondary, marginTop: 14 }]}>CLOUD NAME</Text>
               <TextInput
-                style={[styles.input, { backgroundColor: theme.background, borderColor: theme.cardBorder, color: theme.text }]}
+                style={[
+                  styles.input,
+                  { backgroundColor: theme.background, borderColor: theme.cardBorder, color: theme.text },
+                ]}
                 value={cloudName}
                 onChangeText={setCloudName}
                 placeholder="e.g. your-cloud-name"
@@ -325,9 +615,14 @@ export default function StorageDataModal({ visible, onClose }) {
                 autoCorrect={false}
               />
 
-              <Text style={[styles.inputLabel, { color: theme.textSecondary, marginTop: 12 }]}>UNSIGNED UPLOAD PRESET</Text>
+              <Text style={[styles.inputLabel, { color: theme.textSecondary, marginTop: 12 }]}>
+                UNSIGNED UPLOAD PRESET
+              </Text>
               <TextInput
-                style={[styles.input, { backgroundColor: theme.background, borderColor: theme.cardBorder, color: theme.text }]}
+                style={[
+                  styles.input,
+                  { backgroundColor: theme.background, borderColor: theme.cardBorder, color: theme.text },
+                ]}
                 value={uploadPreset}
                 onChangeText={setUploadPreset}
                 placeholder="e.g. your_unsigned_preset"
@@ -370,58 +665,60 @@ export default function StorageDataModal({ visible, onClose }) {
                 disabled={testingConnection || savingCloudinary}
                 activeOpacity={0.7}
               >
-                <Text style={[styles.clearConfigBtnText, { color: theme.textSecondary }]}>Clear Configuration</Text>
+                <Text style={[styles.clearConfigBtnText, { color: theme.textSecondary }]}>
+                  Clear Configuration
+                </Text>
               </TouchableOpacity>
             </View>
 
-            {/* Detailed Storage Breakdown */}
-            <Text style={[styles.sectionHeading, { color: theme.textSecondary, marginTop: 16 }]}>STORAGE BREAKDOWN</Text>
-            <View style={[styles.breakdownCard, { backgroundColor: theme.background, borderColor: theme.cardBorder }]}>
-              <View style={styles.breakdownRow}>
-                <Text style={[styles.itemLabel, { color: theme.text }]}>🖼 Photos</Text>
-                <Text style={[styles.itemValue, { color: theme.textSecondary }]}>82 MB</Text>
-              </View>
-              <View style={styles.divider} />
-
-              <View style={styles.breakdownRow}>
-                <Text style={[styles.itemLabel, { color: theme.text }]}>🎬 Videos</Text>
-                <Text style={[styles.itemValue, { color: theme.textSecondary }]}>240 MB</Text>
-              </View>
-              <View style={styles.divider} />
-
-              <View style={styles.breakdownRow}>
-                <Text style={[styles.itemLabel, { color: theme.text }]}>📄 Documents</Text>
-                <Text style={[styles.itemValue, { color: theme.textSecondary }]}>18 MB</Text>
-              </View>
-              <View style={styles.divider} />
-
-              <View style={styles.breakdownRow}>
-                <Text style={[styles.itemLabel, { color: theme.text }]}>💾 Offline Data</Text>
-                <Text style={[styles.itemValue, { color: theme.textSecondary }]}>7 MB</Text>
-              </View>
-              <View style={styles.divider} />
-
-              <View style={styles.breakdownRow}>
-                <Text style={[styles.itemLabel, { color: theme.text }]}>⚡ Cache</Text>
-                <Text style={[styles.itemValue, { color: theme.textSecondary }]}>{cacheSize}</Text>
-              </View>
-              <View style={styles.divider} />
-
-              <View style={[styles.breakdownRow, { paddingTop: 14 }]}>
-                <Text style={[styles.totalLabel, { color: theme.text }]}>TOTAL</Text>
-                <Text style={[styles.totalValue, { color: theme.primary }]}>
-                  {cacheSize === '0 MB' ? '347 MB' : '359 MB'}
-                </Text>
+            {/* ============================================================ */}
+            {/* 4. REAL DRIVE / EXTERNAL STORAGE (EXTERNAL LINK MODE)        */}
+            {/* ============================================================ */}
+            <View style={styles.sectionHeaderRow}>
+              <Text style={[styles.sectionHeading, { color: theme.textSecondary }]}>
+                GOOGLE DRIVE INTEGRATION
+              </Text>
+              <View style={[styles.miniBadge, { backgroundColor: '#1e1b4b', borderColor: '#4338ca' }]}>
+                <Text style={[styles.miniBadgeText, { color: '#818cf8' }]}>External Link Mode</Text>
               </View>
             </View>
 
-            {/* Storage & Caching Preferences */}
-            <Text style={[styles.sectionHeading, { color: theme.textSecondary, marginTop: 16 }]}>CACHING PREFERENCES</Text>
+            <View style={[styles.configCard, { backgroundColor: theme.surface, borderColor: theme.cardBorder }]}>
+              <View style={styles.driveStatRow}>
+                <View style={styles.driveStatCol}>
+                  <Text style={[styles.driveStatLabel, { color: theme.textSecondary }]}>STATUS</Text>
+                  <Text style={[styles.driveStatValue, { color: theme.text }]}>{drive.statusLabel}</Text>
+                </View>
+                <View style={styles.driveStatCol}>
+                  <Text style={[styles.driveStatLabel, { color: theme.textSecondary }]}>LINKED DOCUMENTS</Text>
+                  <Text style={[styles.driveStatValue, { color: theme.primary }]}>
+                    {drive.linkedDocumentsCount} files
+                  </Text>
+                </View>
+              </View>
+
+              <View style={[styles.quotaBox, { backgroundColor: theme.background, borderColor: theme.cardBorder, marginTop: 10 }]}>
+                <View style={styles.quotaHeaderRow}>
+                  <Text style={[styles.quotaLabel, { color: theme.textSecondary }]}>DRIVE ACCOUNT QUOTA</Text>
+                  <Text style={[styles.quotaValue, { color: theme.textMuted }]}>{drive.quotaStatus}</Text>
+                </View>
+                <Text style={[styles.quotaNoteText, { color: theme.textMuted }]}>{drive.note}</Text>
+              </View>
+            </View>
+
+            {/* ============================================================ */}
+            {/* 5. CACHING PREFERENCES                                       */}
+            {/* ============================================================ */}
+            <Text style={[styles.sectionHeading, { color: theme.textSecondary, marginTop: 16 }]}>
+              CACHING PREFERENCES
+            </Text>
             <View style={[styles.settingsGroup, { backgroundColor: theme.background, borderColor: theme.cardBorder }]}>
               <View style={styles.prefRow}>
                 <View style={styles.prefInfo}>
                   <Text style={[styles.prefLabel, { color: theme.text }]}>Auto-Purge Cache on Exit</Text>
-                  <Text style={[styles.prefDesc, { color: theme.textMuted }]}>Automatically clear image and video cache when leaving the app</Text>
+                  <Text style={[styles.prefDesc, { color: theme.textMuted }]}>
+                    Automatically clear image and video cache when leaving the app
+                  </Text>
                 </View>
                 <Switch
                   value={draftPrefs.autoPurgeCache}
@@ -435,7 +732,9 @@ export default function StorageDataModal({ visible, onClose }) {
               <View style={styles.prefRow}>
                 <View style={styles.prefInfo}>
                   <Text style={[styles.prefLabel, { color: theme.text }]}>Offline Script Pre-fetch</Text>
-                  <Text style={[styles.prefDesc, { color: theme.textMuted }]}>Download script sides and call sheets for offline set use</Text>
+                  <Text style={[styles.prefDesc, { color: theme.textMuted }]}>
+                    Download script sides and call sheets for offline set use
+                  </Text>
                 </View>
                 <Switch
                   value={draftPrefs.prefetchScripts}
@@ -449,7 +748,9 @@ export default function StorageDataModal({ visible, onClose }) {
               <View style={styles.prefRow}>
                 <View style={styles.prefInfo}>
                   <Text style={[styles.prefLabel, { color: theme.text }]}>Wi-Fi Only for Media Cache</Text>
-                  <Text style={[styles.prefDesc, { color: theme.textMuted }]}>Save cellular data while browsing filmmaker showreels</Text>
+                  <Text style={[styles.prefDesc, { color: theme.textMuted }]}>
+                    Save cellular data while browsing filmmaker showreels
+                  </Text>
                 </View>
                 <Switch
                   value={draftPrefs.wifiOnlyMediaCache}
@@ -460,9 +761,15 @@ export default function StorageDataModal({ visible, onClose }) {
               </View>
             </View>
 
-            {/* REALISTIC COMING SOON FEATURES */}
-            <Text style={[styles.sectionHeading, { color: theme.textSecondary, marginTop: 16 }]}>PROFESSIONAL HARDWARE & VAULT</Text>
-            <View style={[styles.comingSoonCard, { backgroundColor: theme.background, borderColor: theme.cardBorder }]}>
+            {/* ============================================================ */}
+            {/* 6. PROFESSIONAL HARDWARE & VAULT                             */}
+            {/* ============================================================ */}
+            <Text style={[styles.sectionHeading, { color: theme.textSecondary, marginTop: 16 }]}>
+              PROFESSIONAL HARDWARE & VAULT
+            </Text>
+            <View
+              style={[styles.comingSoonCard, { backgroundColor: theme.background, borderColor: theme.cardBorder }]}
+            >
               <View style={styles.comingSoonHeader}>
                 <Text style={[styles.comingSoonTitle, { color: theme.text }]}>Direct NAS & Hard Drive Ingest</Text>
                 <View style={styles.comingSoonBadge}>
@@ -474,7 +781,12 @@ export default function StorageDataModal({ visible, onClose }) {
               </Text>
             </View>
 
-            <View style={[styles.comingSoonCard, { backgroundColor: theme.background, borderColor: theme.cardBorder, marginTop: 8 }]}>
+            <View
+              style={[
+                styles.comingSoonCard,
+                { backgroundColor: theme.background, borderColor: theme.cardBorder, marginTop: 8 },
+              ]}
+            >
               <View style={styles.comingSoonHeader}>
                 <Text style={[styles.comingSoonTitle, { color: theme.text }]}>Encrypted Production Vault</Text>
                 <View style={styles.comingSoonBadge}>
@@ -484,22 +796,6 @@ export default function StorageDataModal({ visible, onClose }) {
               <Text style={[styles.comingSoonDesc, { color: theme.textMuted }]}>
                 Zero-knowledge client-side encryption (AES-256) for high-confidentiality shooting scripts, NDA cast agreements, and budget sheets.
               </Text>
-            </View>
-
-            <View style={[styles.actionBtnRow, { marginTop: 16 }]}>
-              <TouchableOpacity
-                style={[styles.dangerBtn, { borderColor: theme.cardBorder, flex: 1, marginRight: 8 }]}
-                onPress={handleClearCache}
-              >
-                <Text style={[styles.dangerBtnText, { color: theme.text }]}>Clear Cache</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[styles.primaryBtn, { backgroundColor: theme.primary, flex: 1, marginLeft: 8 }]}
-                onPress={() => Alert.alert('Manage Files', 'Cloudinary media manager is synchronized.')}
-              >
-                <Text style={styles.primaryBtnText}>Manage Files</Text>
-              </TouchableOpacity>
             </View>
 
             {/* Save / Cancel / Restore Defaults Bottom Controls */}
@@ -549,7 +845,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 16,
+    marginBottom: 12,
   },
   title: {
     fontSize: 17,
@@ -563,19 +859,156 @@ const styles = StyleSheet.create({
   closeBtn: {
     padding: 6,
   },
+  timestampBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    marginBottom: 16,
+  },
+  timestampInfo: {
+    flex: 1,
+  },
+  timestampLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  timestampNote: {
+    fontSize: 10,
+    marginTop: 1,
+  },
+  refreshBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 6,
+    borderWidth: 1,
+  },
+  refreshBtnText: {
+    fontSize: 11,
+    fontWeight: '800',
+  },
   content: {
     paddingBottom: 32,
+  },
+  sectionHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+    marginTop: 12,
+  },
+  sectionHeading: {
+    fontSize: 11,
+    fontWeight: '850',
+    letterSpacing: 0.8,
+  },
+  miniBadge: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+    borderWidth: 1,
+  },
+  miniBadgeText: {
+    fontSize: 10,
+    fontWeight: '800',
   },
   summaryCard: {
     borderRadius: 12,
     borderWidth: 1,
-    padding: 16,
-    marginBottom: 16,
+    padding: 12,
+    marginBottom: 12,
+  },
+  summaryRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 10,
+  },
+  summaryBox: {
+    flex: 1,
+    borderRadius: 8,
+    borderWidth: 1,
+    padding: 10,
+    alignItems: 'center',
+  },
+  summaryIcon: {
+    fontSize: 18,
+    marginBottom: 4,
+  },
+  summaryBoxTitle: {
+    fontSize: 9,
+    fontWeight: '850',
+    letterSpacing: 0.5,
+    marginBottom: 2,
+    textAlign: 'center',
+  },
+  summaryBoxValue: {
+    fontSize: 14,
+    fontWeight: '900',
+    marginBottom: 2,
+    textAlign: 'center',
+  },
+  summaryBoxSub: {
+    fontSize: 9,
+    textAlign: 'center',
+  },
+  captionBox: {
+    padding: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+  },
+  captionText: {
+    fontSize: 11,
+    lineHeight: 16,
+  },
+  breakdownCard: {
+    borderRadius: 12,
+    borderWidth: 1,
+    paddingHorizontal: 16,
+    paddingVertical: 4,
+    marginBottom: 12,
+  },
+  breakdownRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 11,
+  },
+  breakdownLabelGroup: {
+    flex: 1,
+    paddingRight: 10,
+  },
+  itemLabel: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  itemCountText: {
+    fontSize: 11,
+    marginTop: 2,
+  },
+  itemValue: {
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  totalLabel: {
+    fontSize: 13,
+    fontWeight: '900',
+    letterSpacing: 0.5,
+  },
+  totalValue: {
+    fontSize: 16,
+    fontWeight: '900',
+  },
+  divider: {
+    height: 1,
+    backgroundColor: '#242830',
   },
   statRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginBottom: 16,
+    marginBottom: 14,
   },
   statCol: {
     flex: 1,
@@ -587,7 +1020,7 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   statValue: {
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: '800',
   },
   actionRow: {
@@ -605,17 +1038,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
   },
-  sectionHeaderRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  sectionHeading: {
-    fontSize: 11,
-    fontWeight: '850',
-    letterSpacing: 0.8,
-  },
   statusBadge: {
     paddingHorizontal: 8,
     paddingVertical: 3,
@@ -630,7 +1052,7 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     borderWidth: 1,
     padding: 14,
-    marginBottom: 16,
+    marginBottom: 12,
   },
   securityNoticeBox: {
     flexDirection: 'row',
@@ -675,10 +1097,60 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '700',
   },
-  configExplainer: {
-    fontSize: 12,
-    lineHeight: 16,
-    marginBottom: 12,
+  mediaUsageCard: {
+    padding: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    marginBottom: 10,
+  },
+  mediaUsageTitle: {
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+    marginBottom: 8,
+  },
+  mediaUsageRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  mediaUsageCol: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  mediaUsageLabel: {
+    fontSize: 9,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+    marginBottom: 2,
+  },
+  mediaUsageValue: {
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  quotaBox: {
+    padding: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    marginBottom: 4,
+  },
+  quotaHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+  quotaLabel: {
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+  },
+  quotaValue: {
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  quotaNoteText: {
+    fontSize: 10,
+    lineHeight: 14,
   },
   inputLabel: {
     fontSize: 10,
@@ -736,39 +1208,22 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '600',
   },
-  breakdownCard: {
-    borderRadius: 12,
-    borderWidth: 1,
-    paddingHorizontal: 16,
-    paddingVertical: 4,
-    marginBottom: 16,
-  },
-  breakdownRow: {
+  driveStatRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 12,
   },
-  itemLabel: {
-    fontSize: 14,
-    fontWeight: '600',
+  driveStatCol: {
+    flex: 1,
   },
-  itemValue: {
-    fontSize: 13,
-    fontWeight: '700',
-  },
-  totalLabel: {
-    fontSize: 14,
-    fontWeight: '900',
+  driveStatLabel: {
+    fontSize: 10,
+    fontWeight: '800',
     letterSpacing: 0.5,
+    marginBottom: 4,
   },
-  totalValue: {
-    fontSize: 16,
-    fontWeight: '900',
-  },
-  divider: {
-    height: 1,
-    backgroundColor: '#242830',
+  driveStatValue: {
+    fontSize: 12,
+    fontWeight: '700',
   },
   settingsGroup: {
     borderRadius: 12,
@@ -787,7 +1242,7 @@ const styles = StyleSheet.create({
     paddingRight: 12,
   },
   prefLabel: {
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: '600',
   },
   prefDesc: {
@@ -827,11 +1282,8 @@ const styles = StyleSheet.create({
     fontSize: 11,
     lineHeight: 16,
   },
-  actionBtnRow: {
-    flexDirection: 'row',
-  },
   dangerBtn: {
-    height: 44,
+    height: 42,
     borderRadius: 8,
     borderWidth: 1,
     justifyContent: 'center',
@@ -840,17 +1292,6 @@ const styles = StyleSheet.create({
   dangerBtnText: {
     fontSize: 13,
     fontWeight: '700',
-  },
-  primaryBtn: {
-    height: 44,
-    borderRadius: 8,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  primaryBtnText: {
-    color: '#000000',
-    fontSize: 14,
-    fontWeight: '800',
   },
   footerControls: {
     marginTop: 24,

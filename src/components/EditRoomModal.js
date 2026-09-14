@@ -87,7 +87,26 @@ export default function EditRoomModal({ visible, roomId, roomData, onClose, onUp
       setLocation(roomData.location || '');
       setVisibility(roomData.visibility || 'PUBLIC');
       setRoomStatus(roomData.status || 'ACTIVE');
-      setCrewRequirements(roomData.crewRequirements || []);
+      const rawReqs = Array.isArray(roomData.crewRequirements) ? roomData.crewRequirements : [];
+      const normalized = rawReqs.filter(Boolean).map((req, idx) => {
+        if (typeof req === 'string') {
+          return {
+            id: `role_${idx}_${Date.now()}`,
+            department: 'Production',
+            role: req,
+            quantity: 1,
+            requirement: '',
+          };
+        }
+        return {
+          id: req?.id || `role_${idx}_${Date.now()}`,
+          department: req?.department || 'Production',
+          role: req?.role || 'Crew',
+          quantity: req?.quantity || 1,
+          requirement: req?.requirement || '',
+        };
+      });
+      setCrewRequirements(normalized);
       setPosterUrl(roomData.posterUrl || null);
       setPosterMetadata(roomData.posterMetadata || null);
       setPosterUri(null);
@@ -152,10 +171,15 @@ export default function EditRoomModal({ visible, roomId, roomData, onClose, onUp
   };
 
   const handleRemoveRequirement = (id) => {
-    setCrewRequirements((prev) => prev.filter((r) => r.id !== id));
+    setCrewRequirements((prev) => (prev || []).filter((r) => r && r.id !== id));
   };
 
   const handleSaveRoom = async () => {
+    if (!canEdit) {
+      showToast({ type: 'error', title: 'Permission Denied', message: 'You do not have permission to modify this room.' });
+      return;
+    }
+
     if (!title.trim()) {
       showToast({ type: 'warning', message: 'Please enter a production title.' });
       return;
@@ -186,7 +210,9 @@ export default function EditRoomModal({ visible, roomId, roomData, onClose, onUp
       await updateDoc(roomRef, updatePayload);
 
       showToast({ type: 'success', title: 'Room Updated', message: 'Changes have been committed to this production.' });
-      if (onUpdated) onUpdated();
+      if (onUpdated) {
+        onUpdated({ id: roomId, ...updatePayload });
+      }
       onClose();
     } catch (err) {
       showToast({ type: 'error', title: 'Save Failed', message: err.message || 'Failed to save changes.' });
@@ -196,6 +222,11 @@ export default function EditRoomModal({ visible, roomId, roomData, onClose, onUp
   };
 
   const handleToggleArchive = async () => {
+    if (!canEdit) {
+      showToast({ type: 'error', title: 'Permission Denied', message: 'You do not have permission to modify this room.' });
+      return;
+    }
+
     const isArchived = roomStatus === 'ARCHIVED';
     const newStatus = isArchived ? 'ACTIVE' : 'ARCHIVED';
     showConfirm({
@@ -212,7 +243,9 @@ export default function EditRoomModal({ visible, roomId, roomData, onClose, onUp
             updatedAt: serverTimestamp(),
           });
           setRoomStatus(newStatus);
-          if (onUpdated) onUpdated();
+          if (onUpdated) {
+            onUpdated({ id: roomId, status: newStatus });
+          }
           showToast({ type: 'info', message: `Production Room is now ${newStatus.toLowerCase()}.` });
         } catch (err) {
           showToast({ type: 'error', message: err.message || 'Action failed.' });
@@ -222,6 +255,11 @@ export default function EditRoomModal({ visible, roomId, roomData, onClose, onUp
   };
 
   const handleDeleteRoom = () => {
+    if (roomData?.creatorId !== currentUser?.uid && userAccess !== 'Owner') {
+      showToast({ type: 'error', title: 'Permission Denied', message: 'Only the room creator or owner can delete this production.' });
+      return;
+    }
+
     showConfirm({
       title: 'Delete Production Room?',
       description: `This action cannot be easily undone. All slate takes, stage assets, and production notes for "${title}" will be permanently removed.`,
@@ -232,7 +270,9 @@ export default function EditRoomModal({ visible, roomId, roomData, onClose, onUp
         try {
           await deleteDoc(doc(db, 'rooms', roomId));
           showToast({ type: 'info', title: 'Room Deleted', message: 'Production room has been permanently removed.' });
-          if (onDeleted) onDeleted();
+          if (onDeleted) {
+            onDeleted(roomId);
+          }
           onClose();
         } catch (err) {
           showToast({ type: 'error', message: err.message || 'Failed to delete room.' });
@@ -383,17 +423,17 @@ export default function EditRoomModal({ visible, roomId, roomData, onClose, onUp
             {/* 6. Crew Requirements (Section 12) */}
             <View style={styles.fieldGroup}>
               <Text style={[styles.label, { color: theme.primary }]}>CREW REQUIREMENTS</Text>
-              {crewRequirements.map((req) => (
+              {crewRequirements.filter(Boolean).map((req, idx) => (
                 <View
-                  key={req.id}
+                  key={req.id || `req_${idx}`}
                   style={[styles.reqRow, { backgroundColor: theme.surface, borderColor: theme.cardBorder }]}
                 >
                   <View style={{ flex: 1 }}>
                     <Text style={{ color: theme.primary, fontSize: 10, fontWeight: '800' }}>
-                      {req.department.toUpperCase()}
+                      {(req.department || 'CREW').toUpperCase()}
                     </Text>
                     <Text style={{ color: theme.text, fontSize: 13, fontWeight: '700' }}>
-                      {req.role} — <Text style={{ color: theme.primary }}>{req.quantity} needed</Text>
+                      {req.role || 'Role'} — <Text style={{ color: theme.primary }}>{req.quantity || 1} needed</Text>
                     </Text>
                   </View>
                   {canEdit && (

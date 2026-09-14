@@ -33,6 +33,7 @@ export const REQUEST_STATUS = {
   ACCEPTED: 'ACCEPTED',
   DECLINED: 'DECLINED',
   CANCELLED: 'CANCELLED',
+  WITHDRAWN: 'WITHDRAWN',
 };
 
 /**
@@ -72,6 +73,7 @@ export const submitContactRequest = async ({
     senderUid: sender.uid,
     recipientUid,
     targetTalentUid: targetTalent.uid,
+    callId: details.callId || details.callData?.id || null,
     participants,
     sender: {
       uid: sender.uid,
@@ -488,4 +490,134 @@ export const getPendingRequestBetweenUsers = async (senderUid, targetUid) => {
     console.warn('getPendingRequestBetweenUsers check:', err.message);
     return null;
   }
+};
+
+/**
+ * Stream an authenticated user's application for a specific Crew Call.
+ */
+export const streamUserApplicationForCall = (callId, userUid, callback) => {
+  if (!callId || !userUid) {
+    callback(null);
+    return () => {};
+  }
+
+  const q = query(
+    collection(db, 'contact_requests'),
+    where('senderUid', '==', userUid),
+    where('callId', '==', callId)
+  );
+
+  return onSnapshot(
+    q,
+    (snapshot) => {
+      if (!snapshot || snapshot.empty) {
+        callback(null);
+        return;
+      }
+      const apps = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
+      apps.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+      callback(apps[0]);
+    },
+    (err) => {
+      console.warn('streamUserApplicationForCall error:', err.message);
+      callback(null);
+    }
+  );
+};
+
+/**
+ * Update an existing submitted application owned by userUid.
+ */
+export const updateContactRequest = async (requestId, userUid, updatedDetails) => {
+  if (!requestId || !userUid) throw new Error('Missing requestId or userUid.');
+
+  const requestRef = doc(db, 'contact_requests', requestId);
+  const snap = await getDoc(requestRef);
+  if (!snap.exists()) throw new Error('Application record not found.');
+
+  const data = snap.data();
+  if (data.senderUid !== userUid && data.sender?.uid !== userUid) {
+    throw new Error('Permission denied: You can only update your own application.');
+  }
+
+  const newDetails = {
+    ...data.details,
+    ...updatedDetails,
+  };
+
+  await updateDoc(requestRef, {
+    details: newDetails,
+    updatedAt: new Date().toISOString(),
+  });
+
+  return { id: requestId, ...data, details: newDetails };
+};
+
+/**
+ * Withdraw an application owned by userUid.
+ */
+export const withdrawContactRequest = async (requestId, userUid) => {
+  if (!requestId || !userUid) throw new Error('Missing requestId or userUid.');
+
+  const requestRef = doc(db, 'contact_requests', requestId);
+  const snap = await getDoc(requestRef);
+  if (!snap.exists()) throw new Error('Application record not found.');
+
+  const data = snap.data();
+  if (data.senderUid !== userUid && data.sender?.uid !== userUid) {
+    throw new Error('Permission denied: You can only withdraw your own application.');
+  }
+
+  await updateDoc(requestRef, {
+    status: REQUEST_STATUS.WITHDRAWN,
+    withdrawnAt: new Date().toISOString(),
+    resolvedAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  });
+
+  return { id: requestId, ...data, status: REQUEST_STATUS.WITHDRAWN };
+};
+
+/**
+ * Reapply to a Crew Call after being withdrawn or declined.
+ */
+export const reapplyContactRequest = async (requestId, userUid, updatedDetails = {}) => {
+  if (!requestId || !userUid) throw new Error('Missing requestId or userUid.');
+
+  const requestRef = doc(db, 'contact_requests', requestId);
+  const snap = await getDoc(requestRef);
+  if (!snap.exists()) throw new Error('Application record not found.');
+
+  const data = snap.data();
+  if (data.senderUid !== userUid && data.sender?.uid !== userUid) {
+    throw new Error('Permission denied: You can only reapply for your own application.');
+  }
+
+  const newDetails = {
+    ...data.details,
+    ...updatedDetails,
+  };
+
+  await updateDoc(requestRef, {
+    status: REQUEST_STATUS.PENDING,
+    details: newDetails,
+    reappliedAt: new Date().toISOString(),
+    resolvedAt: null,
+    updatedAt: new Date().toISOString(),
+  });
+
+  // Re-notify the call owner
+  sendNotification({
+    recipientUid: data.recipientUid,
+    senderUid: userUid,
+    senderName: data.sender?.name || data.sender?.fullName || 'A filmmaker',
+    senderPhotoURL: data.sender?.photoURL || null,
+    type: NOTIFICATION_TYPES.REEL_SUBMITTED,
+    title: 'Updated Application Received',
+    message: `${data.sender?.name || 'A filmmaker'} has submitted an updated application.`,
+    targetId: requestId,
+    targetType: 'CONTACT_REQUEST',
+  });
+
+  return { id: requestId, ...data, status: REQUEST_STATUS.PENDING, details: newDetails };
 };

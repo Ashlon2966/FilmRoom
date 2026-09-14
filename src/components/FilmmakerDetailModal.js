@@ -14,6 +14,7 @@ import {
 import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
+import { useModal } from '../context/ModalContext';
 import {
   getConnectionStatus,
   acceptConnectionRequest,
@@ -24,6 +25,7 @@ import {
   followFilmmaker,
   unfollowFilmmaker,
   streamFollowStatus,
+  streamFollowerCount,
 } from '../services/followService';
 import { AVAILABILITY_CONFIG, AVAILABILITY_STATUS, hasCapability } from '../config/rolesConfig';
 
@@ -37,6 +39,7 @@ export default function FilmmakerDetailModal({ visible, filmmaker, onClose, onSe
   const { theme } = useTheme();
   const { currentUser, userProfile } = useAuth();
   const { showToast } = useToast();
+  const { showAlert, showConfirm } = useModal();
 
   const [activeTab, setActiveTab] = useState('Showreel');
   const [connectionState, setConnectionState] = useState({
@@ -52,6 +55,9 @@ export default function FilmmakerDetailModal({ visible, filmmaker, onClose, onSe
   // Follow State (Requirements 29, 57, 91)
   const [isFollowing, setIsFollowing] = useState(false);
   const [isTogglingFollow, setIsTogglingFollow] = useState(false);
+  const [followerCount, setFollowerCount] = useState(
+    filmmaker?.followersCount || filmmaker?.followerCount || 0
+  );
 
   // Modal display states
   const [isRequestContactModalOpen, setIsRequestContactModalOpen] = useState(false);
@@ -63,6 +69,7 @@ export default function FilmmakerDetailModal({ visible, filmmaker, onClose, onSe
   useEffect(() => {
     let isMounted = true;
     let unsubFollow = () => {};
+    let unsubFollowCount = () => {};
 
     const fetchStatus = async () => {
       if (visible && currentUser?.uid && filmmaker?.id && currentUser.uid !== filmmaker.id) {
@@ -79,12 +86,19 @@ export default function FilmmakerDetailModal({ visible, filmmaker, onClose, onSe
           if (isMounted) setIsFollowing(following);
         });
       }
+
+      if (visible && filmmaker?.id) {
+        unsubFollowCount = streamFollowerCount(filmmaker.id, (count) => {
+          if (isMounted) setFollowerCount(count);
+        });
+      }
     };
 
     fetchStatus();
     return () => {
       isMounted = false;
       unsubFollow();
+      unsubFollowCount();
     };
   }, [visible, currentUser?.uid, filmmaker?.id]);
 
@@ -155,11 +169,14 @@ export default function FilmmakerDetailModal({ visible, filmmaker, onClose, onSe
     if (connectionState.status === 'ACCEPTED') {
       onSendPitch();
     } else {
-      Alert.alert(
-        'Professional Connection Required',
-        'FilmRoom requires an accepted contact request between filmmakers before private direct messaging is enabled. Dispatch a contact request or submission to establish a verified connection.',
-        [{ text: 'Understood' }]
-      );
+      showAlert({
+        title: 'Professional Connection Required',
+        message:
+          'FilmRoom requires an accepted contact request between filmmakers before private direct messaging is enabled. Dispatch a contact request or submission to establish a verified connection.',
+        buttonText: 'Understood',
+        icon: '🔒',
+        type: 'info',
+      });
     }
   };
 
@@ -168,36 +185,34 @@ export default function FilmmakerDetailModal({ visible, filmmaker, onClose, onSe
 
     if (connectionState.status === 'ACCEPTED') {
       // Prompt to remove connection
-      Alert.alert(
-        'Professional Connection',
-        `You and ${filmmaker.name} are professionally connected. Would you like to remove this connection?`,
-        [
-          { text: 'Cancel', style: 'cancel' },
-          {
-            text: 'Remove Connection',
-            style: 'destructive',
-            onPress: async () => {
-              setActionLoading(true);
-              try {
-                if (connectionState.connection?.id) {
-                  await removeConnection(connectionState.connection.id);
-                  setConnectionState({
-                    exists: false,
-                    status: null,
-                    isInitiator: false,
-                    isRecipient: false,
-                    connection: null,
-                  });
-                }
-              } catch (e) {
-                Alert.alert('Error', e.message);
-              } finally {
-                setActionLoading(false);
-              }
-            },
-          },
-        ]
-      );
+      showConfirm({
+        title: 'Professional Connection',
+        message: `You and ${filmmaker.name || 'this filmmaker'} are professionally connected. Would you like to remove this connection?`,
+        confirmLabel: 'Remove Connection',
+        cancelLabel: 'Cancel',
+        isDestructive: true,
+        icon: '⚠️',
+        onConfirm: async () => {
+          setActionLoading(true);
+          try {
+            if (connectionState.connection?.id) {
+              await removeConnection(connectionState.connection.id);
+              setConnectionState({
+                exists: false,
+                status: null,
+                isInitiator: false,
+                isRecipient: false,
+                connection: null,
+              });
+              showToast({ type: 'info', message: 'Connection removed.' });
+            }
+          } catch (e) {
+            showAlert({ title: 'Error', message: e.message, type: 'error' });
+          } finally {
+            setActionLoading(false);
+          }
+        },
+      });
       return;
     }
 
@@ -210,9 +225,14 @@ export default function FilmmakerDetailModal({ visible, filmmaker, onClose, onSe
         })
         .then((updated) => {
           setConnectionState(updated);
-          Alert.alert('Connected', `You and ${filmmaker.name} are now connected.`);
+          showAlert({
+            title: 'Connected',
+            message: `You and ${filmmaker.name || 'this filmmaker'} are now connected.`,
+            icon: '✓',
+            type: 'success',
+          });
         })
-        .catch((err) => Alert.alert('Error', err.message))
+        .catch((err) => showAlert({ title: 'Error', message: err.message, type: 'error' }))
         .finally(() => setActionLoading(false));
       return;
     }
@@ -228,7 +248,12 @@ export default function FilmmakerDetailModal({ visible, filmmaker, onClose, onSe
   const handleOpenShowreel = () => {
     if (filmmaker.showreelUrl) {
       Linking.openURL(filmmaker.showreelUrl).catch(() => {
-        Alert.alert('Unable to open link', 'Please check the URL format.');
+        showAlert({
+          title: 'Unable to open link',
+          message: 'Please check the URL format.',
+          icon: '⚠️',
+          type: 'error',
+        });
       });
     }
   };
@@ -288,9 +313,16 @@ export default function FilmmakerDetailModal({ visible, filmmaker, onClose, onSe
                   </View>
                 )}
 
-                <Text style={[styles.metaSub, { color: theme.textSecondary, marginTop: 4 }]}>
-                  @{filmmaker.username} {filmmaker.filmRoomId ? `• ${filmmaker.filmRoomId}` : ''} • 📍 {filmmaker.location || 'Available Worldwide'}
-                </Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>
+                  <Text style={[styles.metaSub, { color: theme.textSecondary }]}>
+                    @{filmmaker.username} {filmmaker.filmRoomId ? `• ${filmmaker.filmRoomId}` : ''} • 📍 {filmmaker.location || 'Available Worldwide'}
+                  </Text>
+                  <View style={[styles.followerPill, { backgroundColor: theme.surface, borderColor: theme.cardBorder }]}>
+                    <Text style={[styles.followerPillText, { color: theme.primary }]}>
+                      👥 {followerCount} {followerCount === 1 ? 'Follower' : 'Followers'}
+                    </Text>
+                  </View>
+                </View>
               </View>
             </View>
 
@@ -346,139 +378,148 @@ export default function FilmmakerDetailModal({ visible, filmmaker, onClose, onSe
               )}
             </View>
 
-            {/* Action Row: Primary Contact + Message + Shortlist */}
+            {/* Action Section: Row 1 Primary Actions, Row 2 Secondary Utilities */}
             {!isSelf && (
-              <View style={styles.actionButtonRow}>
-                {/* Primary Contact Button */}
-                <TouchableOpacity
-                  style={[
-                    styles.primaryContactBtn,
-                    {
-                      backgroundColor:
-                        connectionState.status === 'ACCEPTED'
-                          ? '#1e3d29'
+              <View style={styles.actionBlock}>
+                {/* Row 1: Primary Contact + Direct Message */}
+                <View style={styles.primaryActionRow}>
+                  {/* Primary Contact Button */}
+                  <TouchableOpacity
+                    style={[
+                      styles.primaryContactBtn,
+                      {
+                        backgroundColor:
+                          connectionState.status === 'ACCEPTED'
+                            ? '#1e3d29'
+                            : isPending
+                            ? theme.surface
+                            : theme.primary,
+                        borderColor:
+                          connectionState.status === 'ACCEPTED'
+                            ? '#4ade80'
+                            : isPending
+                            ? theme.cardBorder
+                            : theme.primary,
+                      },
+                    ]}
+                    onPress={handlePrimaryContactPress}
+                    disabled={actionLoading || isPending}
+                    activeOpacity={0.8}
+                  >
+                    {actionLoading ? (
+                      <ActivityIndicator size="small" color="#000000" />
+                    ) : (
+                      <Text
+                        style={[
+                          styles.primaryBtnText,
+                          {
+                            color:
+                              connectionState.status === 'ACCEPTED'
+                                ? '#4ade80'
+                                : isPending
+                                ? theme.textSecondary
+                                : '#000000',
+                          },
+                        ]}
+                        numberOfLines={1}
+                      >
+                        {connectionState.status === 'ACCEPTED'
+                          ? 'Connected ✔'
                           : isPending
-                          ? theme.surface
-                          : theme.primary,
-                      borderColor:
-                        connectionState.status === 'ACCEPTED'
-                          ? '#4ade80'
-                          : isPending
-                          ? theme.cardBorder
-                          : theme.primary,
-                    },
-                  ]}
-                  onPress={handlePrimaryContactPress}
-                  disabled={actionLoading || isPending}
-                  activeOpacity={0.8}
-                >
-                  {actionLoading ? (
-                    <ActivityIndicator size="small" color="#000000" />
-                  ) : (
+                          ? 'Inquiry Pending ⏳'
+                          : connectionState.status === 'PENDING' && connectionState.isRecipient
+                          ? 'Accept Request'
+                          : isFlowB
+                          ? '+ Submit Interest'
+                          : '+ Request Contact'}
+                      </Text>
+                    )}
+                  </TouchableOpacity>
+
+                  {/* Direct Message Button */}
+                  <TouchableOpacity
+                    style={[
+                      styles.messageBtn,
+                      {
+                        backgroundColor:
+                          connectionState.status === 'ACCEPTED' ? theme.surface : '#14161a',
+                        borderColor:
+                          connectionState.status === 'ACCEPTED' ? theme.primary : theme.cardBorder,
+                        opacity: connectionState.status === 'ACCEPTED' ? 1 : 0.7,
+                      },
+                    ]}
+                    onPress={handleMessagePress}
+                    activeOpacity={0.8}
+                  >
                     <Text
                       style={[
-                        styles.primaryBtnText,
+                        styles.messageBtnText,
                         {
                           color:
                             connectionState.status === 'ACCEPTED'
-                              ? '#4ade80'
-                              : isPending
-                              ? theme.textSecondary
-                              : '#000000',
+                              ? theme.primary
+                              : theme.textSecondary,
                         },
                       ]}
+                      numberOfLines={1}
                     >
-                      {connectionState.status === 'ACCEPTED'
-                        ? 'Connected ✔'
-                        : isPending
-                        ? 'Inquiry Pending ⏳'
-                        : connectionState.status === 'PENDING' && connectionState.isRecipient
-                        ? 'Accept Request'
-                        : isFlowB
-                        ? '+ Submit Interest'
-                        : '+ Request Contact'}
+                      💬 Message
                     </Text>
-                  )}
-                </TouchableOpacity>
+                  </TouchableOpacity>
+                </View>
 
-                {/* Submit Reel Button */}
-                <TouchableOpacity
-                  style={[
-                    styles.shortlistBtn,
-                    { backgroundColor: theme.surface, borderColor: theme.primary },
-                  ]}
-                  onPress={() => setIsSubmitReelModalOpen(true)}
-                  activeOpacity={0.8}
-                >
-                  <Text style={[styles.shortlistBtnText, { color: theme.primary }]}>🎬 Reel</Text>
-                </TouchableOpacity>
-
-                {/* Shortlist Button (Available to hiring roles) */}
-                {canShortlist && (
+                {/* Row 2: Secondary Quick Actions */}
+                <View style={styles.secondaryActionRow}>
+                  {/* Submit Reel Button */}
                   <TouchableOpacity
                     style={[
-                      styles.shortlistBtn,
+                      styles.secondaryUtilityBtn,
                       { backgroundColor: theme.surface, borderColor: theme.cardBorder },
                     ]}
-                    onPress={() => setIsShortlistModalOpen(true)}
+                    onPress={() => setIsSubmitReelModalOpen(true)}
                     activeOpacity={0.8}
                   >
-                    <Text style={[styles.shortlistBtnText, { color: theme.text }]}>★ Save</Text>
+                    <Text style={[styles.secondaryUtilityBtnText, { color: theme.primary }]}>🎬 Reel</Text>
                   </TouchableOpacity>
-                )}
 
-                {/* Follow / Subscribe Button (Requirements 29, 57, 91) */}
-                <TouchableOpacity
-                  style={[
-                    styles.shortlistBtn,
-                    {
-                      backgroundColor: isFollowing ? '#1e3d29' : theme.surface,
-                      borderColor: isFollowing ? '#4ade80' : theme.cardBorder,
-                    },
-                  ]}
-                  onPress={handleToggleFollow}
-                  disabled={isTogglingFollow}
-                  activeOpacity={0.8}
-                >
-                  <Text
-                    style={[
-                      styles.shortlistBtnText,
-                      { color: isFollowing ? '#4ade80' : theme.text },
-                    ]}
-                  >
-                    {isFollowing ? '✓ Following' : '+ Follow'}
-                  </Text>
-                </TouchableOpacity>
+                  {/* Shortlist Button (Available to hiring roles) */}
+                  {canShortlist && (
+                    <TouchableOpacity
+                      style={[
+                        styles.secondaryUtilityBtn,
+                        { backgroundColor: theme.surface, borderColor: theme.cardBorder },
+                      ]}
+                      onPress={() => setIsShortlistModalOpen(true)}
+                      activeOpacity={0.8}
+                    >
+                      <Text style={[styles.secondaryUtilityBtnText, { color: theme.text }]}>★ Save</Text>
+                    </TouchableOpacity>
+                  )}
 
-                {/* Direct Message Button (Requires connection) */}
-                <TouchableOpacity
-                  style={[
-                    styles.messageBtn,
-                    {
-                      backgroundColor:
-                        connectionState.status === 'ACCEPTED' ? theme.surface : '#14161a',
-                      borderColor:
-                        connectionState.status === 'ACCEPTED' ? theme.primary : theme.cardBorder,
-                      opacity: connectionState.status === 'ACCEPTED' ? 1 : 0.6,
-                    },
-                  ]}
-                  onPress={handleMessagePress}
-                  activeOpacity={0.8}
-                >
-                  <Text
+                  {/* Follow / Subscribe Button */}
+                  <TouchableOpacity
                     style={[
-                      styles.messageBtnText,
+                      styles.secondaryUtilityBtn,
                       {
-                        color:
-                          connectionState.status === 'ACCEPTED'
-                            ? theme.primary
-                            : theme.textSecondary,
+                        backgroundColor: isFollowing ? '#1e3d29' : theme.surface,
+                        borderColor: isFollowing ? '#4ade80' : theme.cardBorder,
                       },
                     ]}
+                    onPress={handleToggleFollow}
+                    disabled={isTogglingFollow}
+                    activeOpacity={0.8}
                   >
-                    💬 Message
-                  </Text>
-                </TouchableOpacity>
+                    <Text
+                      style={[
+                        styles.secondaryUtilityBtnText,
+                        { color: isFollowing ? '#4ade80' : theme.text },
+                      ]}
+                      numberOfLines={1}
+                    >
+                      {isFollowing ? '✓ Following' : '+ Follow'}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
               </View>
             )}
 
@@ -675,7 +716,7 @@ export default function FilmmakerDetailModal({ visible, filmmaker, onClose, onSe
         onClose={() => setIsSubmitReelModalOpen(false)}
         onSuccess={() => {
           setPendingContactRequest({ status: 'PENDING' });
-          if (currentUser && filmmaker.id) {
+          if (currentUser?.uid && filmmaker?.id) {
             getConnectionStatus(currentUser.uid, filmmaker.id).then(setConnectionState);
           }
         }}
@@ -785,14 +826,17 @@ const styles = StyleSheet.create({
     lineHeight: 16,
     marginTop: 6,
   },
-  actionButtonRow: {
+  actionBlock: {
+    marginBottom: 14,
+    gap: 8,
+  },
+  primaryActionRow: {
     flexDirection: 'row',
     gap: 8,
-    marginBottom: 14,
   },
   primaryContactBtn: {
-    flex: 1.4,
-    paddingVertical: 11,
+    flex: 1.2,
+    paddingVertical: 12,
     borderRadius: 8,
     borderWidth: 1,
     alignItems: 'center',
@@ -802,21 +846,9 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '800',
   },
-  shortlistBtn: {
-    paddingHorizontal: 12,
-    paddingVertical: 11,
-    borderRadius: 8,
-    borderWidth: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  shortlistBtnText: {
-    fontSize: 12,
-    fontWeight: '800',
-  },
   messageBtn: {
     flex: 1,
-    paddingVertical: 11,
+    paddingVertical: 12,
     borderRadius: 8,
     borderWidth: 1,
     alignItems: 'center',
@@ -825,6 +857,32 @@ const styles = StyleSheet.create({
   messageBtnText: {
     fontSize: 12,
     fontWeight: '800',
+  },
+  secondaryActionRow: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  secondaryUtilityBtn: {
+    flex: 1,
+    paddingVertical: 9,
+    borderRadius: 8,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  secondaryUtilityBtnText: {
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  followerPill: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 12,
+    borderWidth: 1,
+  },
+  followerPillText: {
+    fontSize: 10,
+    fontWeight: '700',
   },
   attributesRow: {
     flexDirection: 'row',

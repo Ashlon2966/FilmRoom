@@ -34,6 +34,7 @@ import { useTheme } from './ThemeContext';
 
 const ModalContext = createContext({
   showConfirm: () => Promise.resolve(false),
+  showAlert: () => Promise.resolve(true),
   hideConfirm: () => {},
 });
 
@@ -60,9 +61,12 @@ export function ModalProvider({ children }) {
   const showConfirm = useCallback(
     ({
       title = 'Confirm Action',
-      message = 'Are you sure you want to proceed?',
-      confirmText = 'Confirm',
-      cancelText = 'Cancel',
+      message = '',
+      description = '',
+      confirmText = '',
+      confirmLabel = '',
+      cancelText = '',
+      cancelLabel = '',
       isDestructive = false,
       icon = null, // e.g. '🗑️', '⚠️', '🚪', '🔒', '✓'
       onConfirm = null,
@@ -71,13 +75,70 @@ export function ModalProvider({ children }) {
     }) => {
       return new Promise((resolve) => {
         resolverRef.current = { resolve, onConfirm, onCancel };
+        const resolvedMessage = message || description || 'Are you sure you want to proceed?';
+        const resolvedConfirm = confirmText || confirmLabel || 'Confirm';
+        const resolvedCancel = cancelText || cancelLabel || 'Cancel';
         setDialogConfig({
           title,
-          message,
-          confirmText,
-          cancelText,
+          message: resolvedMessage,
+          confirmText: resolvedConfirm,
+          cancelText: resolvedCancel,
           isDestructive,
+          isAlert: false,
           icon: icon || (isDestructive ? '⚠️' : '🎬'),
+          allowBackdropDismiss,
+        });
+        setIsLoading(false);
+
+        Animated.parallel([
+          Animated.timing(fadeAnim, {
+            toValue: 1,
+            duration: 180,
+            useNativeDriver: true,
+          }),
+          Animated.spring(scaleAnim, {
+            toValue: 1,
+            friction: 7,
+            tension: 65,
+            useNativeDriver: true,
+          }),
+        ]).start();
+      });
+    },
+    [fadeAnim, scaleAnim]
+  );
+
+  const showAlert = useCallback(
+    ({
+      title = 'Information',
+      message = '',
+      description = '',
+      buttonText = '',
+      confirmText = '',
+      icon = null,
+      type = 'info', // 'info' | 'warning' | 'error' | 'success'
+      onDismiss = null,
+      allowBackdropDismiss = true,
+    }) => {
+      return new Promise((resolve) => {
+        resolverRef.current = { resolve, onConfirm: onDismiss, onCancel: onDismiss };
+        const resolvedIcon =
+          icon ||
+          (type === 'warning'
+            ? '⚠️'
+            : type === 'error'
+            ? '🚫'
+            : type === 'success'
+            ? '✓'
+            : '🎬');
+        setDialogConfig({
+          title,
+          message: message || description,
+          confirmText: buttonText || confirmText || 'Understood',
+          cancelText: null,
+          isAlert: true,
+          isDestructive: type === 'error',
+          icon: resolvedIcon,
           allowBackdropDismiss,
         });
         setIsLoading(false);
@@ -157,7 +218,7 @@ export function ModalProvider({ children }) {
   };
 
   return (
-    <ModalContext.Provider value={{ showConfirm, hideConfirm }}>
+    <ModalContext.Provider value={{ showConfirm, showAlert, hideConfirm }}>
       {children}
 
       {dialogConfig && (
@@ -230,34 +291,37 @@ export function ModalProvider({ children }) {
                 </Text>
 
                 {/* Buttons Row */}
-                <View style={styles.actionsRow}>
-                  <TouchableOpacity
-                    style={[
-                      styles.cancelBtn,
-                      {
-                        backgroundColor: theme?.surface || (isDark ? '#121417' : '#f3f4f6'),
-                        borderColor: theme?.cardBorder || (isDark ? '#242830' : '#e5e7eb'),
-                      },
-                    ]}
-                    onPress={handleCancelPress}
-                    disabled={isLoading}
-                    activeOpacity={0.7}
-                    accessibilityLabel={dialogConfig.cancelText}
-                    accessibilityRole="button"
-                  >
-                    <Text
+                <View style={[styles.actionsRow, dialogConfig.isAlert && { justifyContent: 'center' }]}>
+                  {!dialogConfig.isAlert && dialogConfig.cancelText ? (
+                    <TouchableOpacity
                       style={[
-                        styles.cancelBtnText,
-                        { color: theme?.textSecondary || (isDark ? '#9ca3af' : '#4b5563') },
+                        styles.cancelBtn,
+                        {
+                          backgroundColor: theme?.surface || (isDark ? '#121417' : '#f3f4f6'),
+                          borderColor: theme?.cardBorder || (isDark ? '#242830' : '#e5e7eb'),
+                        },
                       ]}
+                      onPress={handleCancelPress}
+                      disabled={isLoading}
+                      activeOpacity={0.7}
+                      accessibilityLabel={dialogConfig.cancelText}
+                      accessibilityRole="button"
                     >
-                      {dialogConfig.cancelText}
-                    </Text>
-                  </TouchableOpacity>
+                      <Text
+                        style={[
+                          styles.cancelBtnText,
+                          { color: theme?.textSecondary || (isDark ? '#9ca3af' : '#4b5563') },
+                        ]}
+                      >
+                        {dialogConfig.cancelText}
+                      </Text>
+                    </TouchableOpacity>
+                  ) : null}
 
                   <TouchableOpacity
                     style={[
                       styles.confirmBtn,
+                      dialogConfig.isAlert && { flex: 1, width: '100%' },
                       {
                         backgroundColor: dialogConfig.isDestructive
                           ? (theme?.danger || '#f87171')

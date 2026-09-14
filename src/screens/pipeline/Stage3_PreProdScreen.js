@@ -22,10 +22,18 @@ import StageProgressBar from '../../components/StageProgressBar';
 import BackButton from '../../components/BackButton';
 import { SingleDatePickerField } from '../../components/CinemaDatePicker';
 
-export default function Stage3_PreProdScreen({ navigation }) {
+export default function Stage3_PreProdScreen({ navigation, route }) {
   const { currentUser, userProfile } = useAuth();
-  const { activeRoomId, roomData, setProductionStage } = useRoom();
+  const { activeRoomId, roomData, setProductionStage, switchRoom } = useRoom();
   const { theme } = useTheme();
+
+  // Sync route param roomId with active room
+  useEffect(() => {
+    const targetRoomId = route?.params?.roomId;
+    if (targetRoomId && targetRoomId !== activeRoomId && switchRoom) {
+      switchRoom(targetRoomId);
+    }
+  }, [route?.params?.roomId, activeRoomId]);
 
   const [callSheetDate, setCallSheetDate] = useState('');
   const [generalCallTime, setGeneralCallTime] = useState('');

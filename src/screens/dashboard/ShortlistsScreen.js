@@ -45,8 +45,8 @@ export default function ShortlistsScreen({ navigation }) {
       setShortlists(lists);
       setLoading(false);
       // If a shortlist is currently viewed, update its reference
-      if (selectedShortlist) {
-        const updated = lists.find((l) => l.id === selectedShortlist.id);
+      if (selectedShortlist && selectedShortlist.id) {
+        const updated = (lists || []).find((l) => l && l.id === selectedShortlist.id);
         setSelectedShortlist(updated || null);
       }
     });

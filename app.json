@@ -13,7 +13,12 @@
     },
     "ios": {
       "bundleIdentifier": "com.ashy123.filmroom",
-      "supportsTablet": true
+      "supportsTablet": true,
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSPhotoLibraryUsageDescription": "FilmRoom requires access to your photo library to select profile photos and production room posters.",
+        "NSCameraUsageDescription": "FilmRoom requires camera access to capture production takes and slate photos."
+      }
     },
     "android": {
       "package": "com.ashy123.filmroom",
@@ -34,7 +39,7 @@
       "cloudinaryCloudName": "",
       "cloudinaryUploadPreset": "",
       "eas": {
-        "projectId": "b4a581c9-7260-4dde-aa2f-19f6adee231e"
+        "projectId": "f5d0ce98-cb1e-4069-a30c-1fd90e277995"
       }
     },
     "owner": "ashy123"

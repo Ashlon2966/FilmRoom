@@ -6,8 +6,9 @@ import {
   signOut,
   sendPasswordResetEmail,
 } from 'firebase/auth';
-import { doc, getDoc, setDoc, onSnapshot } from 'firebase/firestore';
+import { doc, getDoc, setDoc, updateDoc, onSnapshot } from 'firebase/firestore';
 import { auth, db } from '../../firebaseConfig';
+import { generateFilmRoomId } from '../services/userService';
 
 const AuthContext = createContext({});
 
@@ -26,7 +27,15 @@ export const AuthProvider = ({ children }) => {
         const userRef = doc(db, 'users', user.uid);
         const unsubscribeProfile = onSnapshot(userRef, (docSnap) => {
           if (docSnap.exists()) {
-            setUserProfile(docSnap.data());
+            const data = docSnap.data();
+            if (!data.filmRoomId) {
+              const stableCode = generateFilmRoomId(user.uid);
+              updateDoc(userRef, { filmRoomId: stableCode }).catch((err) =>
+                console.warn('Could not backfill filmRoomId:', err.message)
+              );
+              data.filmRoomId = stableCode;
+            }
+            setUserProfile(data);
           } else {
             setUserProfile(null);
           }
@@ -48,8 +57,10 @@ export const AuthProvider = ({ children }) => {
     const cred = await createUserWithEmailAndPassword(auth, email, password);
     const userDocRef = doc(db, 'users', cred.user.uid);
     const cleanUsername = username.trim().replace('@', '') || `filmmaker_${cred.user.uid.slice(0, 5)}`;
+    const filmRoomId = generateFilmRoomId(cred.user.uid);
     await setDoc(userDocRef, {
       uid: cred.user.uid,
+      filmRoomId,
       email: cred.user.email,
       fullName: fullName.trim() || '',
       displayName: fullName.trim() || '',

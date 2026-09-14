@@ -25,7 +25,11 @@ import {
   AVAILABILITY_CONFIG,
 } from '../../config/rolesConfig';
 import { COUNTRIES, formatLocationDisplay } from '../../data/countriesAndRegions';
-import { uploadToCloudinary } from '../../services/cloudinaryService';
+import {
+  uploadToCloudinary,
+  deleteFromCloudinary,
+  extractPublicIdFromUrl,
+} from '../../services/cloudinaryService';
 import { checkUsernameAvailability, updateUserUsername } from '../../services/userService';
 import { validateUsernameFormat } from '../../utils/validation';
 import { useToast } from '../../context/ToastContext';
@@ -168,6 +172,14 @@ export default function ProfileInfoModal({ visible, onClose }) {
         if (currentUser?.uid) {
           await updateDoc(doc(db, 'users', currentUser.uid), {
             photoURL: uploadRes.secureUrl,
+            photoMetadata: {
+              publicId: uploadRes.publicId,
+              deleteToken: uploadRes.deleteToken,
+              resourceType: uploadRes.resourceType,
+              format: uploadRes.format,
+              bytes: uploadRes.bytes,
+              updatedAt: new Date().toISOString(),
+            },
             updatedAt: serverTimestamp(),
           }).catch(console.warn);
           if (auth.currentUser) {
@@ -182,6 +194,52 @@ export default function ProfileInfoModal({ visible, onClose }) {
     } finally {
       setIsUploadingPhoto(false);
     }
+  };
+
+  const handleDeletePhoto = () => {
+    showConfirm({
+      title: 'Delete Profile Photo?',
+      description: 'Are you sure you want to delete your profile photo? It will also be deleted from Cloudinary.',
+      confirmLabel: 'Delete Photo',
+      cancelLabel: 'Cancel',
+      isDestructive: true,
+      onConfirm: async () => {
+        if (!currentUser?.uid) return;
+        setIsUploadingPhoto(true);
+        try {
+          // 1. Delete asset from Cloudinary
+          const publicId =
+            userProfile?.photoMetadata?.publicId ||
+            extractPublicIdFromUrl(photoURL || userProfile?.photoURL);
+          const deleteToken = userProfile?.photoMetadata?.deleteToken;
+
+          if (publicId || deleteToken) {
+            await deleteFromCloudinary({ publicId, deleteToken, resourceType: 'image' });
+          }
+
+          // 2. Clear from Firestore
+          await updateDoc(doc(db, 'users', currentUser.uid), {
+            photoURL: null,
+            photoMetadata: null,
+            updatedAt: serverTimestamp(),
+          });
+
+          // 3. Clear from Firebase Auth
+          if (auth.currentUser) {
+            await updateProfile(auth.currentUser, { photoURL: null }).catch(() => {});
+          }
+
+          // 4. Update local state
+          setPhotoURL(null);
+          setHasChanges(true);
+          showToast({ type: 'success', message: 'Profile photo deleted' });
+        } catch (err) {
+          showToast({ type: 'error', message: err.message || 'Failed to delete photo.' });
+        } finally {
+          setIsUploadingPhoto(false);
+        }
+      },
+    });
   };
 
   const toggleRole = (roleId) => {
@@ -355,11 +413,18 @@ export default function ProfileInfoModal({ visible, onClose }) {
                   </Text>
                 )}
               </TouchableOpacity>
-              <TouchableOpacity onPress={handlePickPhoto} style={styles.changePhotoBtn} disabled={isUploadingPhoto}>
-                <Text style={[styles.changePhotoText, { color: theme.primary || '#f5a623' }]}>
-                  {isUploadingPhoto ? 'Uploading...' : 'Change Profile Photo 📷'}
-                </Text>
-              </TouchableOpacity>
+              <View style={styles.avatarActionsRow}>
+                <TouchableOpacity onPress={handlePickPhoto} style={styles.changePhotoBtn} disabled={isUploadingPhoto}>
+                  <Text style={[styles.changePhotoText, { color: theme.primary || '#f5a623' }]}>
+                    {isUploadingPhoto ? 'Uploading...' : photoURL ? 'Change Photo 📷' : 'Add Photo 📷'}
+                  </Text>
+                </TouchableOpacity>
+                {photoURL ? (
+                  <TouchableOpacity onPress={handleDeletePhoto} style={styles.deletePhotoBtn} disabled={isUploadingPhoto}>
+                    <Text style={styles.deletePhotoText}>Delete Photo 🗑️</Text>
+                  </TouchableOpacity>
+                ) : null}
+              </View>
             </View>
 
             {/* Name */}
@@ -863,14 +928,32 @@ const styles = StyleSheet.create({
     fontSize: 28,
     fontWeight: '900',
   },
-  changePhotoBtn: {
+  avatarActionsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
     marginTop: 8,
-    paddingVertical: 4,
+  },
+  changePhotoBtn: {
+    paddingVertical: 5,
     paddingHorizontal: 10,
   },
   changePhotoText: {
     fontSize: 12,
     fontWeight: '700',
+  },
+  deletePhotoBtn: {
+    paddingVertical: 5,
+    paddingHorizontal: 10,
+    backgroundColor: '#3b1219',
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#7f1d1d',
+  },
+  deletePhotoText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#f87171',
   },
   fieldGroup: {
     marginBottom: 16,

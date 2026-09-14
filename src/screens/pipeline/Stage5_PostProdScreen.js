@@ -27,10 +27,18 @@ const CUT_MILESTONES = [
   'Master Delivery / DCP Complete',
 ];
 
-export default function Stage5_PostProdScreen({ navigation }) {
+export default function Stage5_PostProdScreen({ navigation, route }) {
   const { currentUser, userProfile } = useAuth();
-  const { activeRoomId, roomData, setProductionStage } = useRoom();
+  const { activeRoomId, roomData, setProductionStage, switchRoom } = useRoom();
   const { theme } = useTheme();
+
+  // Sync route param roomId with active room
+  useEffect(() => {
+    const targetRoomId = route?.params?.roomId;
+    if (targetRoomId && targetRoomId !== activeRoomId && switchRoom) {
+      switchRoom(targetRoomId);
+    }
+  }, [route?.params?.roomId, activeRoomId]);
 
   const [activeCut, setActiveCut] = useState('Rough Cut v1');
   const [screenerUrl, setScreenerUrl] = useState('');

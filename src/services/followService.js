@@ -108,3 +108,30 @@ export const streamFollowStatus = (followerUid, targetUid, onStatusChange) => {
     }
   );
 };
+
+/**
+ * Real-time subscription for follower count of a specific user.
+ * Explicitly provides 0 if there are no followers.
+ */
+export const streamFollowerCount = (targetUid, onCountChange) => {
+  if (!targetUid) {
+    onCountChange(0);
+    return () => {};
+  }
+
+  const q = query(
+    collection(db, 'follows'),
+    where('targetUid', '==', targetUid)
+  );
+
+  return onSnapshot(
+    q,
+    (snap) => {
+      onCountChange(snap ? snap.size : 0);
+    },
+    (err) => {
+      console.warn('streamFollowerCount error:', err.message);
+      onCountChange(0);
+    }
+  );
+};

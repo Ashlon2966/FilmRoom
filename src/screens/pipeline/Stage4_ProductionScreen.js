@@ -25,10 +25,18 @@ import { useTheme } from '../../context/ThemeContext';
 import StageProgressBar from '../../components/StageProgressBar';
 import BackButton from '../../components/BackButton';
 
-export default function Stage4_ProductionScreen({ navigation }) {
+export default function Stage4_ProductionScreen({ navigation, route }) {
   const { currentUser, userProfile } = useAuth();
-  const { activeRoomId, roomData, setProductionStage } = useRoom();
+  const { activeRoomId, roomData, setProductionStage, switchRoom } = useRoom();
   const { theme } = useTheme();
+
+  // Sync route param roomId with active room
+  useEffect(() => {
+    const targetRoomId = route?.params?.roomId;
+    if (targetRoomId && targetRoomId !== activeRoomId && switchRoom) {
+      switchRoom(targetRoomId);
+    }
+  }, [route?.params?.roomId, activeRoomId]);
 
   // Slate Inputs
   const [scene, setScene] = useState('1A');

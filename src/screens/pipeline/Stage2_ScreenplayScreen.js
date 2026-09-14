@@ -20,10 +20,18 @@ import { useTheme } from '../../context/ThemeContext';
 import StageProgressBar from '../../components/StageProgressBar';
 import BackButton from '../../components/BackButton';
 
-export default function Stage2_ScreenplayScreen({ navigation }) {
+export default function Stage2_ScreenplayScreen({ navigation, route }) {
   const { currentUser, userProfile } = useAuth();
-  const { activeRoomId, roomData, setProductionStage } = useRoom();
+  const { activeRoomId, roomData, setProductionStage, switchRoom } = useRoom();
   const { theme } = useTheme();
+
+  // Sync route param roomId with active room
+  useEffect(() => {
+    const targetRoomId = route?.params?.roomId;
+    if (targetRoomId && targetRoomId !== activeRoomId && switchRoom) {
+      switchRoom(targetRoomId);
+    }
+  }, [route?.params?.roomId, activeRoomId]);
 
   const [screenplayText, setScreenplayText] = useState('');
   const [sceneCount, setSceneCount] = useState('12');

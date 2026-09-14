@@ -28,12 +28,15 @@ import TalentCard from '../../components/TalentCard';
 import FilterModal from '../../components/FilterModal';
 import QuickProfileModal from '../../components/QuickProfileModal';
 import FilmmakerDetailModal from '../../components/FilmmakerDetailModal';
+import RequestContactModal from '../../components/RequestContactModal';
 import ProductionCallCard from '../../components/ProductionCallCard';
 import SubmitReelModal from '../../components/SubmitReelModal';
 import PostProductionCallModal from '../../components/PostProductionCallModal';
 import ApplyRoleModal from '../../components/ApplyRoleModal';
 import NotificationCenterModal from '../../components/NotificationCenterModal';
 import { streamNotifications } from '../../services/notificationService';
+import { getConnectionStatus } from '../../services/connectionService';
+import { getPendingRequestBetweenUsers } from '../../services/contactRequestService';
 import {
   streamSavedSearches,
   saveSearchCriteria,
@@ -130,10 +133,63 @@ export default function ExploreDirectoryScreen({ navigation }) {
 
   // Recent History State (Requirement 28 & 63)
   const [recentHistory, setRecentHistory] = useState([]);
+  const [contactTargetFilmmaker, setContactTargetFilmmaker] = useState(null);
 
   useEffect(() => {
     getRecentHistory().then(setRecentHistory);
   }, []);
+
+  const handleInquireFilmmaker = async (item) => {
+    if (!item) return;
+    if (currentUser?.uid && item.id === currentUser.uid) {
+      showToast({ type: 'info', message: 'This is your own profile.' });
+      return;
+    }
+
+    try {
+      if (currentUser?.uid && item.id) {
+        const [conn, pendingReq] = await Promise.all([
+          getConnectionStatus(currentUser.uid, item.id),
+          getPendingRequestBetweenUsers(currentUser.uid, item.id),
+        ]);
+
+        if (conn.exists && conn.status === 'ACCEPTED') {
+          showToast({
+            type: 'info',
+            title: 'Already Connected',
+            message: `You are already connected with ${item.fullName || item.displayName || 'this filmmaker'}. Direct messaging is enabled.`,
+          });
+          navigation.navigate('RequestsTab', {
+            screen: 'DirectMessage',
+            params: {
+              peerUser: {
+                id: item.id,
+                fullName: item.fullName || item.displayName || 'Filmmaker',
+                username: item.username || 'crew',
+                photoURL: item.photoURL || null,
+                role: item.primaryRole || item.role || 'Filmmaker',
+              },
+            },
+          });
+          return;
+        }
+
+        if (pendingReq) {
+          showToast({
+            type: 'warning',
+            title: 'Request Pending',
+            message: `An active collaboration request is already pending with ${item.fullName || item.displayName || 'this filmmaker'}.`,
+          });
+          return;
+        }
+      }
+
+      setContactTargetFilmmaker(item);
+    } catch (err) {
+      console.warn('Inquire check error:', err);
+      setContactTargetFilmmaker(item);
+    }
+  };
 
   const handleOpenFilmmaker = (item) => {
     if (!item) return;
@@ -290,6 +346,7 @@ export default function ExploreDirectoryScreen({ navigation }) {
 
   // Deterministic Filtering for Filmmakers (Strictly zero AI)
   const filteredTalents = talents.filter((t) => {
+    if (!t || !t.id) return false;
     if (currentUser?.uid && t.id === currentUser.uid) return false;
 
     // Discoverability check
@@ -776,7 +833,7 @@ export default function ExploreDirectoryScreen({ navigation }) {
                 handleOpenFilmmaker(item);
                 setDetailedFilmmaker(item);
               }}
-              onInquire={() => handleOpenFilmmaker(item)}
+              onInquire={() => handleInquireFilmmaker(item)}
             />
           )}
           contentContainerStyle={{ padding: 16, paddingBottom: 100 }}
@@ -877,13 +934,17 @@ export default function ExploreDirectoryScreen({ navigation }) {
                     LOOKING FOR CREW:
                   </Text>
                   <View style={styles.neededTagsWrap}>
-                    {item.crewRequirements.map((req, idx) => (
-                      <View key={idx} style={[styles.neededPill, { backgroundColor: '#242830' }]}>
-                        <Text style={[styles.neededPillText, { color: theme.text || '#ffffff' }]}>
-                          {req.role} ({req.quantity || 1})
-                        </Text>
-                      </View>
-                    ))}
+                    {item.crewRequirements.filter(Boolean).map((req, idx) => {
+                      const roleTitle = typeof req === 'string' ? req : (req?.role || 'Crew');
+                      const roleQty = typeof req === 'object' && req?.quantity ? req.quantity : 1;
+                      return (
+                        <View key={req?.id || idx} style={[styles.neededPill, { backgroundColor: '#242830' }]}>
+                          <Text style={[styles.neededPillText, { color: theme.text || '#ffffff' }]}>
+                            {roleTitle} ({roleQty})
+                          </Text>
+                        </View>
+                      );
+                    })}
                   </View>
                 </View>
               )}
@@ -996,6 +1057,29 @@ export default function ExploreDirectoryScreen({ navigation }) {
               },
             },
           });
+        }}
+      />
+
+      {/* Inquiry / Request Contact Modal */}
+      <RequestContactModal
+        visible={!!contactTargetFilmmaker}
+        targetTalent={
+          contactTargetFilmmaker
+            ? {
+                id: contactTargetFilmmaker.id,
+                name: contactTargetFilmmaker.fullName || contactTargetFilmmaker.displayName || 'Filmmaker',
+                username: contactTargetFilmmaker.username || 'crew',
+                role: contactTargetFilmmaker.primaryRole || contactTargetFilmmaker.role || 'Filmmaker',
+                category: contactTargetFilmmaker.category || 'TALENT',
+                avatar: contactTargetFilmmaker.photoURL || null,
+                representation: contactTargetFilmmaker.representation || null,
+              }
+            : null
+        }
+        onClose={() => setContactTargetFilmmaker(null)}
+        onSuccess={() => {
+          setContactTargetFilmmaker(null);
+          showToast({ type: 'success', title: 'Inquiry Sent', message: 'Your contact request has been dispatched.' });
         }}
       />
 

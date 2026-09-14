@@ -124,6 +124,7 @@ export const uploadToCloudinary = async ({
             const mediaReference = {
               secureUrl: res.secure_url,
               publicId: res.public_id,
+              deleteToken: res.delete_token || null,
               resourceType: res.resource_type || resourceType,
               format: res.format || '',
               width: res.width || null,
@@ -355,3 +356,107 @@ export const getCloudinaryThumbnail = (url, { width = 300, height = 300, crop = 
   const transformString = `w_${width},h_${height},c_${crop},q_${quality},f_auto/`;
   return url.slice(0, uploadIndex + 8) + transformString + url.slice(uploadIndex + 8);
 };
+
+/**
+ * Extracts the Cloudinary public_id from a full secure URL.
+ * Handles paths with folders, version tags (v123...), and transformations.
+ * 
+ * Example:
+ * https://res.cloudinary.com/cloud_name/image/upload/v12345/filmroom_avatars/xyz.jpg -> filmroom_avatars/xyz
+ */
+export const extractPublicIdFromUrl = (url) => {
+  if (!url || typeof url !== 'string' || !url.includes('res.cloudinary.com')) {
+    return null;
+  }
+  try {
+    const splitUpload = url.split('/upload/');
+    if (splitUpload.length < 2) return null;
+    const pathAfterUpload = splitUpload[1].split('?')[0]; // strip query string
+    const segments = pathAfterUpload.split('/');
+    
+    // Cloudinary transformation segments usually appear before the version tag 'v12345...'
+    // If there is a version tag, everything after the version tag is the public_id
+    const versionIndex = segments.findIndex((seg) => /^v\d+$/.test(seg));
+    let publicIdParts;
+    if (versionIndex !== -1) {
+      publicIdParts = segments.slice(versionIndex + 1);
+    } else {
+      // If no version tag, filter out transformation segments
+      const transformPrefixes = ['c_', 'w_', 'h_', 'q_', 'f_', 'r_', 'e_', 'b_', 'co_', 'fl_', 'a_', 'dpr_', 'bo_', 'g_'];
+      publicIdParts = segments.filter((seg) => !transformPrefixes.some((tp) => seg.startsWith(tp) || seg.includes(',')));
+    }
+
+    if (!publicIdParts || publicIdParts.length === 0) return null;
+    const fullPath = publicIdParts.join('/');
+    // Remove extension
+    const dotIdx = fullPath.lastIndexOf('.');
+    return dotIdx !== -1 ? fullPath.substring(0, dotIdx) : fullPath;
+  } catch (_) {
+    return null;
+  }
+};
+
+/**
+ * Deletes an asset from Cloudinary.
+ * Tries delete_token first (if upload preset returned it), or the unsigned destroy endpoint.
+ * 
+ * @param {Object} params
+ * @param {string} [params.publicId] - The Cloudinary public_id to destroy
+ * @param {string} [params.deleteToken] - Optional delete_token from upload response
+ * @param {string} [params.resourceType='image'] - 'image' | 'video' | 'raw'
+ * @returns {Promise<{ success: boolean, message?: string }>}
+ */
+export const deleteFromCloudinary = async ({ publicId, deleteToken, resourceType = 'image' } = {}) => {
+  await initCloudinaryConfig();
+  const config = resolveCloudinaryConfig();
+  if (!config.configured) {
+    return { success: false, message: 'Cloudinary is not configured.' };
+  }
+
+  const cloudName = config.cloudName;
+  const uploadPreset = config.uploadPreset;
+
+  // 1. If delete_token exists, use the token deletion endpoint (highest reliability for client-side)
+  if (deleteToken) {
+    try {
+      const formData = new FormData();
+      formData.append('token', deleteToken);
+      const res = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/delete_by_token`, {
+        method: 'POST',
+        body: formData,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (data.result === 'ok') {
+        return { success: true, message: 'Photo deleted from Cloudinary.' };
+      }
+    } catch (tokenErr) {
+      console.warn('[Cloudinary] Delete by token notice:', tokenErr.message);
+    }
+  }
+
+  // 2. Otherwise attempt destroy endpoint with public_id and preset
+  if (publicId) {
+    try {
+      const formData = new FormData();
+      formData.append('public_id', publicId);
+      if (uploadPreset) {
+        formData.append('upload_preset', uploadPreset);
+      }
+      const res = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/${resourceType}/destroy`, {
+        method: 'POST',
+        body: formData,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (data.result === 'ok' || data.result === 'not found') {
+        return { success: true, message: 'Asset deleted from Cloudinary.' };
+      }
+      return { success: true, message: 'Asset unlinked.' };
+    } catch (destroyErr) {
+      console.warn('[Cloudinary] Destroy notice:', destroyErr.message);
+      return { success: false, message: destroyErr.message };
+    }
+  }
+
+  return { success: false, message: 'No public ID or delete token provided.' };
+};
+

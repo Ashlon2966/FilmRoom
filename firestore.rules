@@ -88,15 +88,18 @@ service cloud.firestore {
     // 3. User-to-User Connections (Decoupled from chats and rooms)
     match /connections/{connectionId} {
       allow get: if isAuthenticated() && (
-        (resource.data.users != null && request.auth.uid in resource.data.users) ||
-        (resource.data.uids != null && request.auth.uid in resource.data.uids) ||
-        (resource.data.participants != null && request.auth.uid in resource.data.participants) ||
-        resource.data.recipientId == request.auth.uid ||
-        resource.data.initiatorId == request.auth.uid ||
-        resource.data.recipientUid == request.auth.uid ||
-        resource.data.initiatorUid == request.auth.uid ||
-        resource.data.talentUid == request.auth.uid ||
-        resource.data.managerUid == request.auth.uid
+        connectionId.matches('.*' + request.auth.uid + '.*') ||
+        (resource != null && (
+          (resource.data.users != null && request.auth.uid in resource.data.users) ||
+          (resource.data.uids != null && request.auth.uid in resource.data.uids) ||
+          (resource.data.participants != null && request.auth.uid in resource.data.participants) ||
+          resource.data.recipientId == request.auth.uid ||
+          resource.data.initiatorId == request.auth.uid ||
+          resource.data.recipientUid == request.auth.uid ||
+          resource.data.initiatorUid == request.auth.uid ||
+          resource.data.talentUid == request.auth.uid ||
+          resource.data.managerUid == request.auth.uid
+        ))
       );
       allow list: if isAuthenticated() && (
         (resource.data.users != null && request.auth.uid in resource.data.users) ||

@@ -17,6 +17,7 @@ import {
   where,
   onSnapshot,
 } from 'firebase/firestore';
+import { db } from '../../../firebaseConfig';
 import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
 import { useToast } from '../../context/ToastContext';
@@ -432,7 +433,7 @@ export default function ConversationsListScreen({ navigation }) {
                 <Text style={[styles.sectionHeading, { color: theme.primary }]}>
                   PENDING INCOMING REQUESTS ({pendingRequests.length})
                 </Text>
-                {pendingRequests.map((req) => {
+                {pendingRequests.filter(Boolean).map((req, idx) => {
                   const initiator = req.userData?.[req.initiatorId] || {
                     fullName: 'Filmmaker',
                     username: 'crew',
@@ -442,7 +443,7 @@ export default function ConversationsListScreen({ navigation }) {
 
                   return (
                     <View
-                      key={req.id}
+                      key={req.id || `req_${idx}`}
                       style={[
                         styles.pendingCard,
                         { backgroundColor: theme.card, borderColor: theme.cardBorder },

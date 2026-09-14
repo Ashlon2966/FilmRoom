@@ -132,17 +132,23 @@ export default function NotificationCenterModal({ visible, onClose, navigation }
     if (item.targetType === 'ROOM' && item.targetId) {
       onClose();
       if (navigation) {
-        navigation.navigate('RoomDetail', { roomId: item.targetId });
+        navigation.navigate('TheBoardTab', {
+          screen: 'StagePipeline',
+          params: {
+            screen: 'Stage1_Ideation',
+            params: { roomId: item.targetId },
+          },
+        });
       }
     } else if (item.targetType === 'CONTACT_REQUEST') {
       onClose();
       if (navigation) {
-        navigation.navigate('RequestsTab');
+        navigation.navigate('RequestsTab', { screen: 'RequestsHub' });
       }
     } else if (item.targetType === 'CONNECTION') {
       onClose();
       if (navigation) {
-        navigation.navigate('Messages');
+        navigation.navigate('RequestsTab', { screen: 'ConversationsList' });
       }
     }
   };
@@ -249,7 +255,7 @@ export default function NotificationCenterModal({ visible, onClose, navigation }
                   </Text>
                 </View>
               ) : (
-                pendingRequests.map((req) => {
+                pendingRequests.filter(Boolean).map((req, idx) => {
                   const senderName = req.sender?.fullName || req.sender?.name || 'Filmmaker';
                   const senderRole = req.sender?.role || 'Talent';
                   const senderAvatar = req.sender?.photoURL || req.sender?.avatar;
@@ -257,7 +263,7 @@ export default function NotificationCenterModal({ visible, onClose, navigation }
 
                   return (
                     <View
-                      key={req.id}
+                      key={req.id || `req_${idx}`}
                       style={[
                         styles.requestCard,
                         { backgroundColor: theme.background, borderColor: theme.primary + '40' },
@@ -343,11 +349,11 @@ export default function NotificationCenterModal({ visible, onClose, navigation }
                   </Text>
                 </View>
               ) : (
-                notifications.map((item) => {
+                notifications.filter(Boolean).map((item, idx) => {
                   const isUnread = !item.isRead;
                   return (
                     <TouchableOpacity
-                      key={item.id}
+                      key={item.id || `notif_${idx}`}
                       style={[
                         styles.notificationCard,
                         {

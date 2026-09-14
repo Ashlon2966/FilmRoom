@@ -196,7 +196,7 @@ export default function SignupScreen({ navigation }) {
 
   const handleAuthError = (error) => {
     const code = error?.code || '';
-    if (__DEV__) {
+    if (typeof __DEV__ !== 'undefined' && __DEV__) {
       console.warn('[SignupScreen] Firebase Auth error code:', code, error?.message);
     }
 
@@ -340,7 +340,7 @@ export default function SignupScreen({ navigation }) {
           email: trimmedEmail,
         });
       } catch (firestoreErr) {
-        if (__DEV__) {
+        if (typeof __DEV__ !== 'undefined' && __DEV__) {
           console.warn('[SignupScreen] Firestore reservation error:', firestoreErr);
         }
         Alert.alert(
@@ -353,7 +353,7 @@ export default function SignupScreen({ navigation }) {
 
       // Reactive auth state listener in RootNavigator handles transition to ProfileSetupScreen
     } catch (unexpectedError) {
-      if (__DEV__) {
+      if (typeof __DEV__ !== 'undefined' && __DEV__) {
         console.warn('[SignupScreen] Unexpected error during signup:', unexpectedError);
       }
       Alert.alert('Registration Notice', 'An unexpected error occurred. Please try again.');

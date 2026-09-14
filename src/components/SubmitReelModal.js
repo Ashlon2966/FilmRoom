@@ -157,6 +157,8 @@ export default function SubmitReelModal({
           representation: targetLead.representation || null,
         },
         details: {
+          callId: callData?.id || null,
+          callTitle: callData?.title || projectInterest.trim() || null,
           portfolioOrReel: activeReel,
           roleOrDepartment: roleOrDepartment.trim(),
           projectInterest: projectInterest.trim() || null,

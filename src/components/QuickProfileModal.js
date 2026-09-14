@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 import { useTheme } from '../context/ThemeContext';
 import { AVAILABILITY_CONFIG, AVAILABILITY_STATUS } from '../config/rolesConfig';
+import { streamFollowerCount } from '../services/followService';
 
 export default function QuickProfileModal({
   visible,
@@ -23,9 +24,29 @@ export default function QuickProfileModal({
   onReviewRequest,
   onAccept,
   onDecline,
+  onConnect,
+  connectLabel = '+ Add Connection',
   actionLoading = false,
 }) {
   const { theme } = useTheme();
+
+  const [followerCount, setFollowerCount] = useState(
+    profile?.followersCount || profile?.followerCount || 0
+  );
+
+  useEffect(() => {
+    let isMounted = true;
+    const targetUid = profile?.id || profile?.uid;
+    if (visible && targetUid) {
+      const unsub = streamFollowerCount(targetUid, (count) => {
+        if (isMounted) setFollowerCount(count);
+      });
+      return () => {
+        isMounted = false;
+        unsub();
+      };
+    }
+  }, [visible, profile?.id, profile?.uid]);
 
   if (!profile) return null;
 
@@ -114,9 +135,16 @@ export default function QuickProfileModal({
                 <Text style={[styles.nameText, { color: theme.text || '#ffffff' }]} numberOfLines={1}>
                   {name.toUpperCase()}
                 </Text>
-                <Text style={[styles.userHandle, { color: theme.textSecondary || '#9ca3af' }]}>
-                  @{username} {filmRoomId ? `• ${filmRoomId}` : ''}
-                </Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginTop: 2 }}>
+                  <Text style={[styles.userHandle, { color: theme.textSecondary || '#9ca3af' }]}>
+                    @{username} {filmRoomId ? `• ${filmRoomId}` : ''}
+                  </Text>
+                  <View style={[styles.followerPill, { backgroundColor: theme.surface || '#121417', borderColor: theme.cardBorder || '#242830' }]}>
+                    <Text style={[styles.followerPillText, { color: theme.primary || '#f5a623' }]}>
+                      👥 {followerCount} {followerCount === 1 ? 'Follower' : 'Followers'}
+                    </Text>
+                  </View>
+                </View>
                 <Text style={[styles.locationText, { color: theme.textMuted || '#64748b' }]}>
                   📍 {location}
                 </Text>
@@ -260,6 +288,19 @@ export default function QuickProfileModal({
                 ) : null}
 
                 <View style={styles.primaryActionRow}>
+                  {onConnect && (
+                    <TouchableOpacity
+                      style={[
+                        styles.viewFullBtn,
+                        { backgroundColor: theme.primary || '#f5a623', flex: 1 },
+                      ]}
+                      onPress={onConnect}
+                      activeOpacity={0.8}
+                    >
+                      <Text style={styles.viewFullText}>{connectLabel}</Text>
+                    </TouchableOpacity>
+                  )}
+
                   {onReviewRequest && (
                     <TouchableOpacity
                       style={[
@@ -278,16 +319,20 @@ export default function QuickProfileModal({
                     </TouchableOpacity>
                   )}
 
-                  <TouchableOpacity
-                    style={[
-                      styles.viewFullBtn,
-                      { backgroundColor: theme.primary || '#f5a623' },
-                    ]}
-                    onPress={onViewFullProfile}
-                    activeOpacity={0.8}
-                  >
-                    <Text style={styles.viewFullText}>View Full Profile ➔</Text>
-                  </TouchableOpacity>
+                  {onViewFullProfile && (
+                    <TouchableOpacity
+                      style={[
+                        styles.viewFullBtn,
+                        { backgroundColor: onConnect ? (theme.surface || '#121417') : (theme.primary || '#f5a623'), flex: 1, borderWidth: onConnect ? 1 : 0, borderColor: theme.cardBorder || '#242830' },
+                      ]}
+                      onPress={onViewFullProfile}
+                      activeOpacity={0.8}
+                    >
+                      <Text style={[styles.viewFullText, onConnect && { color: theme.text || '#ffffff' }]}>
+                        View Full Profile ➔
+                      </Text>
+                    </TouchableOpacity>
+                  )}
                 </View>
               </>
             )}
@@ -370,6 +415,16 @@ const styles = StyleSheet.create({
   userHandle: {
     fontSize: 13,
     marginTop: 2,
+  },
+  followerPill: {
+    paddingHorizontal: 7,
+    paddingVertical: 1,
+    borderRadius: 10,
+    borderWidth: 1,
+  },
+  followerPillText: {
+    fontSize: 10,
+    fontWeight: '700',
   },
   locationText: {
     fontSize: 12,
