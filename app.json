@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "FilmRoom",
-    "slug": "FilmRoom",
+    "slug": "filmroom",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -29,7 +29,11 @@
     ],
     "extra": {
       "cloudinaryCloudName": "",
-      "cloudinaryUploadPreset": ""
-    }
+      "cloudinaryUploadPreset": "",
+      "eas": {
+        "projectId": "b4a581c9-7260-4dde-aa2f-19f6adee231e"
+      }
+    },
+    "owner": "ashy123"
   }
 }
