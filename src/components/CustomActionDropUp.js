@@ -23,7 +23,8 @@ export default function CustomActionDropUp({
   visible,
   title,
   subtitle,
-  actions = [], // [{ label, icon, subtitle, isDestructive, onPress }]
+  actions = [], // [{ label, icon, subtitle, description, isDestructive, onPress, id }]
+  onSelect,
   onClose,
 }) {
   const { theme, isDark } = useTheme();
@@ -119,8 +120,13 @@ export default function CustomActionDropUp({
                       },
                     ]}
                     onPress={() => {
-                      onClose();
-                      act.onPress?.();
+                      onClose?.();
+                      if (typeof act.onPress === 'function') {
+                        act.onPress();
+                      }
+                      if (typeof onSelect === 'function') {
+                        onSelect(act);
+                      }
                     }}
                     activeOpacity={0.7}
                   >
@@ -155,9 +161,9 @@ export default function CustomActionDropUp({
                       >
                         {act.label}
                       </Text>
-                      {act.subtitle ? (
+                      {(act.subtitle || act.description) ? (
                         <Text style={[styles.actionSub, { color: theme?.textSecondary || '#9ca3af' }]}>
-                          {act.subtitle}
+                          {act.subtitle || act.description}
                         </Text>
                       ) : null}
                     </View>

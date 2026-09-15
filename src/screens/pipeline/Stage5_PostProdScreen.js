@@ -137,9 +137,35 @@ export default function Stage5_PostProdScreen({ navigation, route }) {
       {/* 1. STATIONARY TOP SECTION */}
       <View style={[styles.stationaryHeader, { backgroundColor: theme?.card || '#181b1f', borderColor: theme?.cardBorder || '#242830' }]}>
         <View style={styles.topNavRow}>
-          <BackButton onPress={() => navigation.navigate('TheBoardTab', { screen: 'RoomsList' })} />
+          <BackButton
+            onPress={() => {
+              if (navigation.canGoBack()) {
+                navigation.goBack();
+              } else {
+                navigation.navigate('TheBoardTab', { screen: 'RoomsList' });
+              }
+            }}
+          />
           <View style={{ flex: 1 }}>
-            <StageProgressBar currentStageIndex={4} onSelectStage={(idx) => setProductionStage(idx)} />
+            <StageProgressBar
+              currentStageIndex={4}
+              onSelectStage={(idx) => {
+                if (setProductionStage) setProductionStage(idx);
+                const stageScreens = [
+                  'Stage1_Ideation',
+                  'Stage2_Screenplay',
+                  'Stage3_PreProd',
+                  'Stage4_Production',
+                  'Stage5_PostProd',
+                ];
+                if (stageScreens[idx]) {
+                  navigation.navigate(stageScreens[idx], {
+                    roomId: activeRoomId,
+                    roomData,
+                  });
+                }
+              }}
+            />
           </View>
         </View>
 

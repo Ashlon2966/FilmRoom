@@ -10,6 +10,7 @@ import {
   Modal,
   Alert,
   ScrollView,
+  RefreshControl,
 } from 'react-native';
 import {
   collection,
@@ -24,6 +25,7 @@ import { db } from '../../../firebaseConfig';
 import { useAuth } from '../../context/AuthContext';
 import { useRoom } from '../../context/RoomContext';
 import { useTheme } from '../../context/ThemeContext';
+import { useToast } from '../../context/ToastContext';
 import TalentCard from '../../components/TalentCard';
 import FilterModal from '../../components/FilterModal';
 import QuickProfileModal from '../../components/QuickProfileModal';
@@ -54,6 +56,7 @@ export default function ExploreDirectoryScreen({ navigation }) {
   const { theme } = useTheme();
   const { currentUser } = useAuth();
   const { switchRoom } = useRoom();
+  const { showToast } = useToast();
 
   // Active Explore Section: 'FILMMAKERS' | 'CALLS' | 'ROOMS'
   const [activeTab, setActiveTab] = useState('FILMMAKERS');
@@ -139,6 +142,20 @@ export default function ExploreDirectoryScreen({ navigation }) {
     getRecentHistory().then(setRecentHistory);
   }, []);
 
+  // One-time notification permission request post-auth/setup (Requirement 2.B & 2.C)
+  useEffect(() => {
+    if (!currentUser?.uid) return;
+    import('../../services/notificationService').then(
+      ({ hasRequestedNotificationPermission, requestNotificationPermissions }) => {
+        hasRequestedNotificationPermission().then((alreadyRequested) => {
+          if (!alreadyRequested) {
+            requestNotificationPermissions();
+          }
+        });
+      }
+    );
+  }, [currentUser?.uid]);
+
   const handleInquireFilmmaker = async (item) => {
     if (!item) return;
     if (currentUser?.uid && item.id === currentUser.uid) {
@@ -147,6 +164,17 @@ export default function ExploreDirectoryScreen({ navigation }) {
     }
 
     try {
+      // Privacy Settings: Check direct messaging permissions (Requirement 9)
+      const messagingPerm = item.messagingPermissions || item.privacySettings?.messagingPermissions || 'ANYONE';
+      if (messagingPerm === 'NOBODY') {
+        showToast({
+          type: 'warning',
+          title: 'Inquiries Disabled',
+          message: `${item.fullName || item.displayName || 'This filmmaker'} has disabled direct inquiries and messaging.`,
+        });
+        return;
+      }
+
       if (currentUser?.uid && item.id) {
         const [conn, pendingReq] = await Promise.all([
           getConnectionStatus(currentUser.uid, item.id),
@@ -170,6 +198,15 @@ export default function ExploreDirectoryScreen({ navigation }) {
                 role: item.primaryRole || item.role || 'Filmmaker',
               },
             },
+          });
+          return;
+        }
+
+        if (messagingPerm === 'CONNECTIONS_ONLY') {
+          showToast({
+            type: 'warning',
+            title: 'Connections Only',
+            message: `${item.fullName || item.displayName || 'This filmmaker'} only accepts inquiries from confirmed connections. Send a connection request first.`,
           });
           return;
         }
@@ -340,17 +377,51 @@ export default function ExploreDirectoryScreen({ navigation }) {
     return () => unsub();
   }, []);
 
+  const [refreshing, setRefreshing] = useState(false);
+
   useEffect(() => {
     fetchFirstTalentsPage();
   }, []);
+
+  const onRefresh = async () => {
+    setRefreshing(true);
+    try {
+      if (activeTab === 'FILMMAKERS') {
+        await fetchFirstTalentsPage();
+      } else if (activeTab === 'CALLS') {
+        const callsRef = collection(db, 'production_calls');
+        const snap = await getDocs(callsRef);
+        const calls = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        calls.sort((a, b) => {
+          const tA = a.createdAt?.seconds || 0;
+          const tB = b.createdAt?.seconds || 0;
+          return tB - tA;
+        });
+        setProductionCalls(calls);
+      } else if (activeTab === 'ROOMS') {
+        const roomsRef = collection(db, 'rooms');
+        const q = query(roomsRef, where('visibility', '==', 'PUBLIC'));
+        const snap = await getDocs(q);
+        const rooms = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        setPublicRooms(rooms);
+      }
+    } catch (err) {
+      console.warn('Explore refresh error:', err.message);
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   // Deterministic Filtering for Filmmakers (Strictly zero AI)
   const filteredTalents = talents.filter((t) => {
     if (!t || !t.id) return false;
     if (currentUser?.uid && t.id === currentUser.uid) return false;
 
-    // Discoverability check
+    // Discoverability & Privacy Master checks (Requirement 9)
     if (t.discoverability === 'HIDDEN') return false;
+    if (t.publicProfile === false || t.privacySettings?.publicProfile === false) return false;
+    const vis = t.visibility || t.privacySettings?.visibility || 'PUBLIC';
+    if (vis === 'PRIVATE') return false;
 
     // 1. Availability Filter
     if (activeFilters.status !== 'ALL') {
@@ -805,12 +876,21 @@ export default function ExploreDirectoryScreen({ navigation }) {
         <FlatList
           data={filteredTalents}
           keyExtractor={(item) => item.id}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              tintColor={theme.primary || '#f5a623'}
+              colors={[theme.primary || '#f5a623']}
+            />
+          }
           renderItem={({ item }) => (
             <TalentCard
               talent={{
                 id: item.id,
                 name: item.fullName || item.displayName || 'Filmmaker',
                 username: item.username || 'crew',
+                gender: item.gender,
                 role: item.primaryRole || item.role || item.roles?.[0] || 'Filmmaker',
                 filmRoomId: item.filmRoomId,
                 category: item.category,
@@ -866,6 +946,14 @@ export default function ExploreDirectoryScreen({ navigation }) {
         <FlatList
           data={filteredCalls}
           keyExtractor={(item) => item.id}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              tintColor={theme.primary || '#f5a623'}
+              colors={[theme.primary || '#f5a623']}
+            />
+          }
           renderItem={({ item }) => (
             <ProductionCallCard
               project={item}
@@ -898,6 +986,14 @@ export default function ExploreDirectoryScreen({ navigation }) {
         <FlatList
           data={filteredRooms}
           keyExtractor={(item) => item.id}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              tintColor={theme.primary || '#f5a623'}
+              colors={[theme.primary || '#f5a623']}
+            />
+          }
           renderItem={({ item }) => (
             <View
               style={[

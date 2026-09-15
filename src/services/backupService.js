@@ -11,6 +11,7 @@ import {
   query,
   where,
   serverTimestamp,
+  addDoc,
 } from 'firebase/firestore';
 import { db } from '../../firebaseConfig';
 import { Alert } from 'react-native';
@@ -167,47 +168,58 @@ export async function exportFullFilmRoomBackup(userId) {
 }
 
 /**
- * Project Package Export (.filmroom / .json)
- * Exports a single production room, team roles, stages, call sheets, and slate metadata.
+ * Export Project as portable .filmroom Project Package (Requirement 5.B)
+ * Bundles Schema version ("1.0"), Project metadata, Stages 1 through 5
+ * (scripts, shot lists, call sheets, takes, cuts) and cast/crew members.
  * Strips private phone numbers and emails for safe sharing.
  */
-export async function exportProjectPackage(roomId) {
+export async function exportFilmRoomProjectPackage(roomId) {
   if (!roomId) {
-    Alert.alert('Error', 'Room ID is required to export project package.');
-    return;
+    throw new Error('Room ID is required to export project package.');
   }
 
+  const roomSnap = await getDoc(doc(db, 'rooms', roomId));
+  if (!roomSnap.exists()) {
+    throw new Error('Production Room not found in Firestore.');
+  }
+
+  const room = roomSnap.data();
+
+  // Fetch Stage 4 logged slate takes from subcollection
+  let takesList = [];
   try {
-    const roomSnap = await getDoc(doc(db, 'rooms', roomId));
-    if (!roomSnap.exists()) {
-      Alert.alert('Error', 'Production Room not found in Firestore.');
-      return;
+    const takesSnap = await getDocs(collection(db, 'rooms', roomId, 'takes'));
+    takesList = takesSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  } catch (tErr) {
+    if (typeof __DEV__ !== 'undefined' && __DEV__) {
+      console.warn('Export takes fetch notice:', tErr.message);
     }
+  }
 
-    const room = roomSnap.data();
+  // Sanitize team members: remove private email and phone numbers
+  const sanitizedMembers = {};
+  if (room.members) {
+    Object.entries(room.members).forEach(([uid, m]) => {
+      sanitizedMembers[uid] = {
+        name: m.name || m.fullName || 'Crew Member',
+        username: m.username || 'filmmaker',
+        productionRole: m.productionRole || m.roles?.[0] || 'Crew',
+        roomAccess: m.roomAccess || 'Crew',
+        photoURL: m.photoURL || null,
+      };
+    });
+  }
 
-    // Sanitize team members: remove private email and phone numbers
-    const sanitizedMembers = {};
-    if (room.members) {
-      Object.entries(room.members).forEach(([uid, m]) => {
-        sanitizedMembers[uid] = {
-          name: m.name || m.fullName || 'Crew Member',
-          username: m.username || 'filmmaker',
-          productionRole: m.productionRole || m.roles?.[0] || 'Crew',
-          roomAccess: m.roomAccess || 'Crew',
-          photoURL: m.photoURL || null,
-        };
-      });
-    }
-
-    const projectPackage = {
-      filmroomBackupVersion: CURRENT_BACKUP_VERSION,
-      packageType: 'PROJECT_PACKAGE',
-      exportedAt: new Date().toISOString(),
-      room: {
-        id: roomId,
+  const projectPackage = {
+    filmroomSchemaVersion: '1.0',
+    packageType: 'FILMROOM_PROJECT',
+    exportedAt: new Date().toISOString(),
+    project: {
+      id: roomId,
+      metadata: {
         title: room.title || 'Untitled Production',
         projectType: room.projectType || 'Film',
+        genre: room.genre || 'Drama',
         logline: room.logline || null,
         synopsis: room.synopsis || null,
         shootStartDate: room.shootStartDate || null,
@@ -216,28 +228,51 @@ export async function exportProjectPackage(roomId) {
         budgetTier: room.budgetTier || null,
         posterUrl: room.posterUrl || null,
         currentStage: room.currentStage || 0,
-        stage1: room.stage1 || null,
-        members: sanitizedMembers,
+        status: room.status || 'ACTIVE',
       },
-    };
+      stages: {
+        stage1: room.stage1 || null,
+        stage2: room.stage2 || null,
+        stage3: room.stage3 || null,
+        stage4: {
+          takes: takesList,
+        },
+        stage5: room.stage5 || null,
+      },
+      members: sanitizedMembers,
+    },
+  };
 
-    const cleanTitle = (room.title || 'project').replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
-    const fileName = `${cleanTitle}_package_${Date.now()}.json`;
-    const destinationUri = `${FileSystem.documentDirectory}${fileName}`;
+  const cleanTitle = (room.title || 'project').replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
+  const fileName = `${cleanTitle}_${Date.now()}.filmroom`;
+  const destinationUri = `${FileSystem.documentDirectory}${fileName}`;
 
-    await FileSystem.writeAsStringAsync(destinationUri, JSON.stringify(projectPackage, null, 2), {
-      encoding: 'utf8',
+  await FileSystem.writeAsStringAsync(destinationUri, JSON.stringify(projectPackage, null, 2), {
+    encoding: 'utf8',
+  });
+
+  const isShareAvailable = await Sharing.isAvailableAsync();
+  if (isShareAvailable) {
+    await Sharing.shareAsync(destinationUri, {
+      mimeType: 'application/json',
+      dialogTitle: `Export ${room.title} .filmroom Package`,
+      UTI: 'public.json',
     });
+  }
 
-    const isShareAvailable = await Sharing.isAvailableAsync();
-    if (isShareAvailable) {
-      await Sharing.shareAsync(destinationUri, {
-        mimeType: 'application/json',
-        dialogTitle: `Share ${room.title} Project Package`,
-      });
-    } else {
-      Alert.alert('✓ Project Exported', `Saved locally as ${fileName}`);
-    }
+  return {
+    uri: destinationUri,
+    fileName,
+    projectTitle: room.title || 'Untitled Production',
+  };
+}
+
+/**
+ * Legacy alias for exportFilmRoomProjectPackage
+ */
+export async function exportProjectPackage(roomId) {
+  try {
+    return await exportFilmRoomProjectPackage(roomId);
   } catch (err) {
     Alert.alert('Export Failed', err.message);
   }
@@ -384,4 +419,214 @@ export async function restoreCloudDataToLocal(userId) {
   }
 
   return count;
+}
+
+/**
+ * Validates a .filmroom portable project package file (Requirement 5.C)
+ * Returns structured validation status, schema version, and project metadata.
+ */
+export async function validateFilmRoomPackage(fileUri) {
+  try {
+    const fileContent = await FileSystem.readAsStringAsync(fileUri, { encoding: 'utf8' });
+    let parsed;
+    try {
+      parsed = JSON.parse(fileContent);
+    } catch (parseErr) {
+      return {
+        isValid: false,
+        error: 'Malformed JSON: The selected file does not contain valid JSON data.',
+      };
+    }
+
+    const version = parsed.filmroomSchemaVersion || parsed.filmroomBackupVersion || parsed.version;
+    if (!version) {
+      return {
+        isValid: false,
+        error: 'Missing Schema: This file lacks a recognizable FilmRoom schema version identifier.',
+      };
+    }
+
+    const projectData = parsed.project || parsed.room;
+    if (!projectData) {
+      return {
+        isValid: false,
+        error: 'Incomplete Package: No project or production room payload was found in this file.',
+      };
+    }
+
+    const title = projectData.metadata?.title || projectData.title;
+    if (!title || typeof title !== 'string' || !title.trim()) {
+      return {
+        isValid: false,
+        error: 'Invalid Project Data: Mandatory project title is missing or empty.',
+      };
+    }
+
+    const stages = projectData.stages || {
+      stage1: projectData.stage1,
+      stage2: projectData.stage2,
+      stage3: projectData.stage3,
+      stage4: { takes: [] },
+      stage5: projectData.stage5,
+    };
+
+    const takes = stages?.stage4?.takes || [];
+    const members = projectData.members || {};
+
+    return {
+      isValid: true,
+      version,
+      projectTitle: title,
+      packageType: parsed.packageType || 'FILMROOM_PROJECT',
+      counts: {
+        stages: [1, 2, 3, 4, 5].filter((s) => stages?.[`stage${s}`]).length,
+        takes: takes.length,
+        members: Object.keys(members).length,
+        hasScript: !!stages?.stage1?.scriptFile,
+        hasCallSheet: !!stages?.stage3?.callSheetFile,
+      },
+      projectData,
+      rawPackage: parsed,
+    };
+  } catch (err) {
+    return {
+      isValid: false,
+      error: err.message || 'Error reading .filmroom package file.',
+    };
+  }
+}
+
+/**
+ * Restores a validated .filmroom project into the user's account as a new room or updates an existing one (Requirement 5.C)
+ */
+export async function importFilmRoomProject({ projectData, importMode = 'NEW_ROOM', userId, targetRoomId }) {
+  if (!projectData || !userId) {
+    throw new Error('Project data and authenticated user ID are required for import.');
+  }
+
+  const meta = projectData.metadata || projectData;
+  const stages = projectData.stages || {};
+  const takes = stages.stage4?.takes || [];
+
+  let finalRoomId;
+
+  if (importMode === 'UPDATE_EXISTING' && targetRoomId) {
+    finalRoomId = targetRoomId;
+    const updatePayload = {
+      title: meta.title || 'Untitled Production',
+      projectType: meta.projectType || 'Film',
+      genre: meta.genre || 'Drama',
+      logline: meta.logline || null,
+      synopsis: meta.synopsis || null,
+      shootStartDate: meta.shootStartDate || null,
+      shootEndDate: meta.shootEndDate || null,
+      location: meta.location || null,
+      budgetTier: meta.budgetTier || null,
+      posterUrl: meta.posterUrl || null,
+      currentStage: meta.currentStage || 0,
+      stage1: stages.stage1 || projectData.stage1 || null,
+      stage2: stages.stage2 || projectData.stage2 || null,
+      stage3: stages.stage3 || projectData.stage3 || null,
+      stage5: stages.stage5 || projectData.stage5 || null,
+      status: 'ACTIVE',
+      updatedAt: serverTimestamp(),
+    };
+
+    await updateDoc(doc(db, 'rooms', finalRoomId), updatePayload);
+  } else {
+    // NEW_ROOM: Create fresh room with current user as owner
+    const newRoomRef = doc(collection(db, 'rooms'));
+    finalRoomId = newRoomRef.id;
+
+    const newRoomPayload = {
+      title: meta.title || 'Untitled Production',
+      projectType: meta.projectType || 'Film',
+      genre: meta.genre || 'Drama',
+      logline: meta.logline || null,
+      synopsis: meta.synopsis || null,
+      shootStartDate: meta.shootStartDate || null,
+      shootEndDate: meta.shootEndDate || null,
+      location: meta.location || null,
+      budgetTier: meta.budgetTier || null,
+      posterUrl: meta.posterUrl || null,
+      currentStage: meta.currentStage || 0,
+      creatorId: userId,
+      memberUids: [userId],
+      members: {
+        [userId]: {
+          name: 'Project Lead',
+          productionRole: 'Director',
+          roomAccess: 'Owner',
+        },
+        ...(projectData.members || {}),
+      },
+      stage1: stages.stage1 || projectData.stage1 || null,
+      stage2: stages.stage2 || projectData.stage2 || null,
+      stage3: stages.stage3 || projectData.stage3 || null,
+      stage5: stages.stage5 || projectData.stage5 || null,
+      status: 'ACTIVE',
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    };
+
+    await setDoc(newRoomRef, newRoomPayload);
+  }
+
+  // Restore Stage 4 takes into subcollection if present
+  if (Array.isArray(takes) && takes.length > 0) {
+    for (const take of takes) {
+      try {
+        const { id, ...takeFields } = take;
+        await addDoc(collection(db, 'rooms', finalRoomId, 'takes'), {
+          ...takeFields,
+          timestamp: serverTimestamp(),
+        });
+      } catch (tErr) {
+        if (typeof __DEV__ !== 'undefined' && __DEV__) {
+          console.warn('Restore take notice:', tErr.message);
+        }
+      }
+    }
+  }
+
+  // Update local SQLite cache
+  const roomSnap = await getDoc(doc(db, 'rooms', finalRoomId));
+  if (roomSnap.exists()) {
+    await cacheRoom({ id: finalRoomId, ...roomSnap.data() });
+  }
+
+  return {
+    roomId: finalRoomId,
+    title: meta.title || 'Production Room',
+  };
+}
+
+/**
+ * Archives a project, removing it from active Board views while keeping it safely stored (Requirement 5.D)
+ */
+export async function archiveProject(roomId) {
+  if (!roomId) return;
+  await updateDoc(doc(db, 'rooms', roomId), {
+    status: 'ARCHIVED',
+    updatedAt: serverTimestamp(),
+  });
+  const snap = await getDoc(doc(db, 'rooms', roomId));
+  if (snap.exists()) {
+    await cacheRoom({ id: roomId, ...snap.data() });
+  }
+}
+
+/**
+ * Restores an archived project back to its exact previous state (Requirement 5.D)
+ */
+export async function restoreProject(roomId) {
+  if (!roomId) return;
+  await updateDoc(doc(db, 'rooms', roomId), {
+    status: 'ACTIVE',
+    updatedAt: serverTimestamp(),
+  });
+  const snap = await getDoc(doc(db, 'rooms', roomId));
+  if (snap.exists()) {
+    await cacheRoom({ id: roomId, ...snap.data() });
+  }
 }

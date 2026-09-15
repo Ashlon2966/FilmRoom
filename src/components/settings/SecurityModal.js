@@ -8,9 +8,13 @@ import {
   ScrollView,
   TextInput,
   ActivityIndicator,
+  Switch,
+  Platform,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   sendPasswordResetEmail,
+  sendEmailVerification,
   reauthenticateWithCredential,
   EmailAuthProvider,
   deleteUser,
@@ -21,6 +25,18 @@ import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
 import { useToast } from '../../context/ToastContext';
 import { useModal } from '../../context/ModalContext';
+import {
+  requestSecondaryEmailCode,
+  verifySecondaryEmailCode,
+} from '../../services/authVerificationService';
+
+const AUTOLOCK_OPTIONS = [
+  { key: 'IMMEDIATELY', label: 'Immediately' },
+  { key: '1_MIN', label: '1 min' },
+  { key: '5_MIN', label: '5 min' },
+  { key: '15_MIN', label: '15 min' },
+  { key: 'NEVER', label: 'Never' },
+];
 
 export default function SecurityModal({ visible, onClose, navigation }) {
   const { currentUser, userProfile } = useAuth();
@@ -28,11 +44,19 @@ export default function SecurityModal({ visible, onClose, navigation }) {
   const { showToast } = useToast();
   const { showConfirm } = useModal();
 
-  // 2-Step Security Verification state (Requirements 68-73)
+  // Biometrics and auto-lock state (Requirement 10)
+  const [biometricsEnabled, setBiometricsEnabled] = useState(false);
+  const [autolockInterval, setAutolockInterval] = useState('5_MIN');
+
+  // 2-Step Security Verification state (Requirements 10 & 11, 68-73)
   const [secondaryEmail, setSecondaryEmail] = useState('');
   const [secondaryInput, setSecondaryInput] = useState('');
   const [isTwoStepEnabled, setIsTwoStepEnabled] = useState(false);
+  const [isPendingVerification, setIsPendingVerification] = useState(false);
   const [isSettingUpTwoStep, setIsSettingUpTwoStep] = useState(false);
+  const [twoStepSubStep, setTwoStepSubStep] = useState('EMAIL'); // 'EMAIL' | 'CODE'
+  const [sixDigitCode, setSixDigitCode] = useState('');
+  const [isSendingCode, setIsSendingCode] = useState(false);
   const [isDisablingTwoStep, setIsDisablingTwoStep] = useState(false);
   const [disablePassword, setDisablePassword] = useState('');
   const [isSavingTwoStep, setIsSavingTwoStep] = useState(false);
@@ -47,17 +71,38 @@ export default function SecurityModal({ visible, onClose, navigation }) {
   const isEmailVerified = currentUser?.emailVerified || false;
   const blockedCount = userProfile?.blockedUids?.length || 0;
 
-  // Load private security configuration
+  // Load private security configuration and local preferences
   useEffect(() => {
-    if (!visible || !currentUser?.uid) return;
+    if (!visible) return;
+
+    AsyncStorage.getItem('@filmroom_biometrics_enabled').then((val) => {
+      if (val !== null) setBiometricsEnabled(val === 'true');
+    });
+    AsyncStorage.getItem('@filmroom_autolock_interval').then((val) => {
+      if (val) setAutolockInterval(val);
+    });
+
+    if (!currentUser?.uid) return;
+
     const fetchSecurity = async () => {
       setLoadingSecurity(true);
       try {
-        const secSnap = await getDoc(doc(db, 'users', currentUser.uid, 'private', 'security'));
+        const [secSnap, verSnap] = await Promise.all([
+          getDoc(doc(db, 'users', currentUser.uid, 'private', 'security')),
+          getDoc(doc(db, 'users', currentUser.uid, 'private', 'secondary_email_verification')),
+        ]);
+
         if (secSnap.exists()) {
           const data = secSnap.data();
           setSecondaryEmail(data.secondaryEmail || '');
           setIsTwoStepEnabled(!!data.twoStepEnabled);
+          setIsPendingVerification(!data.twoStepEnabled && !!data.secondaryEmail);
+        } else if (verSnap.exists()) {
+          const vData = verSnap.data();
+          if (vData.secondaryEmail && !vData.verified) {
+            setSecondaryEmail(vData.secondaryEmail);
+            setIsPendingVerification(true);
+          }
         }
       } catch (err) {
         // Fallback if not configured yet
@@ -67,6 +112,29 @@ export default function SecurityModal({ visible, onClose, navigation }) {
     };
     fetchSecurity();
   }, [visible, currentUser?.uid]);
+
+  const handleToggleBiometrics = async (val) => {
+    setBiometricsEnabled(val);
+    try {
+      await AsyncStorage.setItem('@filmroom_biometrics_enabled', String(val));
+      showToast({
+        type: 'success',
+        message: val ? 'Biometric unlock enabled.' : 'Biometric unlock disabled.',
+      });
+    } catch (_) {}
+  };
+
+  const handleSelectAutolock = async (val) => {
+    setAutolockInterval(val);
+    try {
+      await AsyncStorage.setItem('@filmroom_autolock_interval', val);
+      const label = AUTOLOCK_OPTIONS.find((o) => o.key === val)?.label || val;
+      showToast({
+        type: 'info',
+        message: `Auto-lock timeout set to ${label}.`,
+      });
+    } catch (_) {}
+  };
 
   const handleChangePassword = async () => {
     if (!currentUser?.email) {
@@ -86,8 +154,8 @@ export default function SecurityModal({ visible, onClose, navigation }) {
     }
   };
 
-  // Enable 2-Step Verification (Requirement 71 & 72)
-  const handleEnableTwoStep = async () => {
+  // Step 1: Request 6-digit secondary email code (Requirement 11)
+  const handleSendSecondaryCode = async () => {
     const cleanEmail = secondaryInput.trim().toLowerCase();
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(cleanEmail)) {
@@ -99,29 +167,60 @@ export default function SecurityModal({ visible, onClose, navigation }) {
       return;
     }
 
+    setIsSendingCode(true);
+    try {
+      await requestSecondaryEmailCode(cleanEmail, currentUser.uid);
+      setSecondaryEmail(cleanEmail);
+      setIsPendingVerification(true);
+      setTwoStepSubStep('CODE');
+      showToast({
+        type: 'success',
+        title: 'Verification Code Dispatched',
+        message: `A 6-digit confirmation code was sent to ${cleanEmail}.`,
+      });
+    } catch (err) {
+      showToast({ type: 'error', message: err.message || 'Failed to dispatch verification code.' });
+    } finally {
+      setIsSendingCode(false);
+    }
+  };
+
+  // Step 2: Confirm 6-digit code and activate 2-step verification (Requirement 11)
+  const handleVerifySecondaryCode = async () => {
+    if (!sixDigitCode || sixDigitCode.trim().length !== 6) {
+      showToast({ type: 'warning', message: 'Please enter the complete 6-digit verification code.' });
+      return;
+    }
+
     setIsSavingTwoStep(true);
     try {
-      // Critical Requirement 72: Secondary security email must NOT be globally unique.
-      // We store it directly in the user's private security document without global uniqueness checks.
-      await setDoc(doc(db, 'users', currentUser.uid, 'private', 'security'), {
-        secondaryEmail: cleanEmail,
-        secondaryEmailVerified: true,
-        twoStepEnabled: true,
-        enabledAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      }, { merge: true });
+      await verifySecondaryEmailCode(sixDigitCode.trim(), currentUser.uid);
 
-      setSecondaryEmail(cleanEmail);
+      await setDoc(
+        doc(db, 'users', currentUser.uid, 'private', 'security'),
+        {
+          secondaryEmail,
+          secondaryEmailVerified: true,
+          twoStepEnabled: true,
+          enabledAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+        { merge: true }
+      );
+
       setIsTwoStepEnabled(true);
+      setIsPendingVerification(false);
       setIsSettingUpTwoStep(false);
+      setTwoStepSubStep('EMAIL');
+      setSixDigitCode('');
       setSecondaryInput('');
       showToast({
         type: 'success',
-        title: '2-Step Security Enabled',
-        message: `Secondary security email (${cleanEmail}) is now verified and active.`,
+        title: '2-Step Security Verified',
+        message: `Secondary email (${secondaryEmail}) verified and active.`,
       });
     } catch (err) {
-      showToast({ type: 'error', message: err.message || 'Failed to configure secondary security email.' });
+      showToast({ type: 'error', message: err.message || 'Invalid or expired verification code.' });
     } finally {
       setIsSavingTwoStep(false);
     }
@@ -232,19 +331,43 @@ export default function SecurityModal({ visible, onClose, navigation }) {
           </View>
 
           <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
-            {/* Status Checklist Card */}
+            {/* Status Checklist Card (Requirement 10) */}
             <View style={[styles.statusCard, { backgroundColor: theme.background, borderColor: theme.cardBorder }]}>
               <View style={styles.statusItemRow}>
                 <View style={styles.statusLabelCol}>
-                  <Text style={[styles.statusItemTitle, { color: theme.text }]}>Email Address</Text>
+                  <Text style={[styles.statusItemTitle, { color: theme.text }]}>Primary Email</Text>
                   <Text style={[styles.statusItemSub, { color: theme.textMuted }]}>{currentUser?.email}</Text>
                 </View>
                 <View style={styles.badgeRow}>
-                  <Text style={[styles.checkMark, { color: isEmailVerified ? theme.success || '#4ade80' : theme.primary }]}>
-                    {isEmailVerified ? '✓ Verified' : '● Registered'}
+                  <Text style={[styles.checkMark, { color: isEmailVerified ? '#4ade80' : '#f5a623' }]}>
+                    {isEmailVerified ? '✓ Verified' : '● Unverified'}
                   </Text>
                 </View>
               </View>
+
+              {!isEmailVerified && (
+                <TouchableOpacity
+                  style={[styles.resendVerifyBtn, { borderColor: theme.cardBorder, backgroundColor: theme.card }]}
+                  onPress={async () => {
+                    try {
+                      if (currentUser) {
+                        await sendEmailVerification(currentUser);
+                        showToast({
+                          type: 'success',
+                          title: 'Verification Dispatched',
+                          message: `Verification link sent to ${currentUser.email}. Check your inbox.`,
+                        });
+                      }
+                    } catch (e) {
+                      showToast({ type: 'error', message: e.message || 'Could not send verification email.' });
+                    }
+                  }}
+                >
+                  <Text style={{ color: theme.primary, fontSize: 11, fontWeight: '700' }}>
+                    ✉️ Resend Verification Email
+                  </Text>
+                </TouchableOpacity>
+              )}
 
               <View style={styles.divider} />
 
@@ -262,10 +385,14 @@ export default function SecurityModal({ visible, onClose, navigation }) {
 
               <View style={styles.statusItemRow}>
                 <View style={styles.statusLabelCol}>
-                  <Text style={[styles.statusItemTitle, { color: theme.text }]}>Active Sessions</Text>
-                  <Text style={[styles.statusItemSub, { color: theme.textMuted }]}>Current mobile device session</Text>
+                  <Text style={[styles.statusItemTitle, { color: theme.text }]}>Active Session</Text>
+                  <Text style={[styles.statusItemSub, { color: theme.textMuted }]}>
+                    {Platform.OS === 'ios' ? 'Apple iOS' : Platform.OS === 'android' ? 'Android Mobile' : 'Web / Desktop'} • FilmRoom App (Current)
+                  </Text>
                 </View>
-                <Text style={[styles.statusCount, { color: theme.text }]}>1</Text>
+                <View style={[styles.sessionBadge, { backgroundColor: '#14291e', borderColor: '#4ade80' }]}>
+                  <Text style={{ color: '#4ade80', fontSize: 10, fontWeight: '800' }}>● ONLINE</Text>
+                </View>
               </View>
 
               <View style={styles.divider} />
@@ -320,11 +447,70 @@ export default function SecurityModal({ visible, onClose, navigation }) {
               </TouchableOpacity>
             </View>
 
-            {/* 2-Step Security Verification (Requirements 68-73) */}
+            {/* App Security & Access (Requirement 10) */}
+            <Text style={[styles.sectionHeading, { color: theme.textSecondary, marginTop: 20 }]}>
+              APP SECURITY & ACCESS
+            </Text>
+            <View style={[styles.statusCard, { backgroundColor: theme.background, borderColor: theme.cardBorder }]}>
+              {/* Biometrics */}
+              <View style={styles.settingSwitchRow}>
+                <View style={{ flex: 1, paddingRight: 10 }}>
+                  <Text style={[styles.statusItemTitle, { color: theme.text }]}>Biometric Unlock</Text>
+                  <Text style={[styles.statusItemSub, { color: theme.textMuted }]}>
+                    Require Face ID / Fingerprint unlock when launching FilmRoom
+                  </Text>
+                </View>
+                <Switch
+                  value={biometricsEnabled}
+                  onValueChange={handleToggleBiometrics}
+                  trackColor={{ false: '#26292e', true: theme.primary }}
+                  thumbColor={biometricsEnabled ? '#ffffff' : '#888888'}
+                />
+              </View>
+
+              <View style={styles.divider} />
+
+              {/* Auto-lock Timeout */}
+              <View style={{ paddingVertical: 8 }}>
+                <Text style={[styles.statusItemTitle, { color: theme.text }]}>Auto-Lock Timeout</Text>
+                <Text style={[styles.statusItemSub, { color: theme.textMuted, marginBottom: 10 }]}>
+                  Automatically lock session when backgrounded or inactive
+                </Text>
+                <View style={styles.autolockOptionRow}>
+                  {AUTOLOCK_OPTIONS.map((opt) => {
+                    const isSelected = autolockInterval === opt.key;
+                    return (
+                      <TouchableOpacity
+                        key={opt.key}
+                        style={[
+                          styles.autolockPill,
+                          {
+                            backgroundColor: isSelected ? theme.primary : theme.card,
+                            borderColor: isSelected ? theme.primary : theme.cardBorder,
+                          },
+                        ]}
+                        onPress={() => handleSelectAutolock(opt.key)}
+                      >
+                        <Text
+                          style={[
+                            styles.autolockPillText,
+                            { color: isSelected ? '#000000' : theme.textSecondary },
+                          ]}
+                        >
+                          {opt.label}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              </View>
+            </View>
+
+            {/* 2-Step Security Verification (Requirements 10 & 11, 68-73) */}
             <Text style={[styles.sectionHeading, { color: theme.textSecondary, marginTop: 20 }]}>
               2-STEP SECURITY VERIFICATION
             </Text>
-            <View style={[styles.statusCard, { backgroundColor: theme.background, borderColor: isTwoStepEnabled ? (theme.success || '#4ade80') : theme.cardBorder }]}>
+            <View style={[styles.statusCard, { backgroundColor: theme.background, borderColor: isTwoStepEnabled ? (theme.success || '#4ade80') : isPendingVerification ? '#f5a623' : theme.cardBorder }]}>
               <View style={styles.twoStepHeaderRow}>
                 <View style={{ flex: 1, paddingRight: 8 }}>
                   <Text style={[styles.twoStepTitle, { color: theme.text }]}>
@@ -338,19 +524,19 @@ export default function SecurityModal({ visible, onClose, navigation }) {
                   style={[
                     styles.twoStepBadge,
                     {
-                      backgroundColor: isTwoStepEnabled ? '#1e3d29' : '#2a2215',
-                      borderColor: isTwoStepEnabled ? '#4ade80' : '#f5a623',
+                      backgroundColor: isTwoStepEnabled ? '#1e3d29' : isPendingVerification ? '#332314' : '#2a2215',
+                      borderColor: isTwoStepEnabled ? '#4ade80' : isPendingVerification ? '#f5a623' : '#6b7280',
                     },
                   ]}
                 >
                   <Text
                     style={{
-                      color: isTwoStepEnabled ? '#4ade80' : '#f5a623',
+                      color: isTwoStepEnabled ? '#4ade80' : isPendingVerification ? '#f5a623' : '#9ca3af',
                       fontSize: 11,
                       fontWeight: '800',
                     }}
                   >
-                    {isTwoStepEnabled ? '✓ Enabled' : '● Inactive'}
+                    {isTwoStepEnabled ? '✓ Verified' : isPendingVerification ? '● Pending Verification' : '● Inactive'}
                   </Text>
                 </View>
               </View>
@@ -383,52 +569,116 @@ export default function SecurityModal({ visible, onClose, navigation }) {
                 </>
               ) : isSettingUpTwoStep ? (
                 <View style={{ marginTop: 12 }}>
-                  <Text style={[styles.emailDetailLabel, { color: theme.textMuted, marginBottom: 6 }]}>
-                    ENTER SECONDARY SECURITY EMAIL
-                  </Text>
-                  <TextInput
-                    style={[styles.input, { backgroundColor: theme.surface, color: theme.text, borderColor: theme.cardBorder }]}
-                    placeholder="backup@example.com"
-                    placeholderTextColor={theme.textMuted}
-                    value={secondaryInput}
-                    onChangeText={setSecondaryInput}
-                    autoCapitalize="none"
-                    keyboardType="email-address"
-                  />
-                  <Text style={[styles.mfaClarificationText, { color: theme.textMuted, marginTop: 4, marginBottom: 12 }]}>
-                    * Secondary email is private to your account. It must differ from your primary email. As per FilmRoom policy, it is not required to be globally unique.
-                  </Text>
-                  <View style={{ flexDirection: 'row', gap: 10, justifyContent: 'flex-end' }}>
-                    <TouchableOpacity
-                      style={[styles.cancelDeleteBtn, { borderColor: theme.cardBorder }]}
-                      onPress={() => {
-                        setIsSettingUpTwoStep(false);
-                        setSecondaryInput('');
-                      }}
-                    >
-                      <Text style={{ color: theme.textSecondary, fontWeight: '700' }}>Cancel</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={[styles.confirmEnableBtn, { backgroundColor: theme.primary }]}
-                      onPress={handleEnableTwoStep}
-                      disabled={isSavingTwoStep}
-                    >
-                      {isSavingTwoStep ? (
-                        <ActivityIndicator color="#000000" size="small" />
-                      ) : (
-                        <Text style={{ color: '#000000', fontWeight: '800' }}>Verify & Enable</Text>
-                      )}
-                    </TouchableOpacity>
-                  </View>
+                  {twoStepSubStep === 'EMAIL' ? (
+                    <>
+                      <Text style={[styles.emailDetailLabel, { color: theme.textMuted, marginBottom: 6 }]}>
+                        ENTER SECONDARY SECURITY EMAIL
+                      </Text>
+                      <TextInput
+                        style={[styles.input, { backgroundColor: theme.surface, color: theme.text, borderColor: theme.cardBorder }]}
+                        placeholder="backup@example.com"
+                        placeholderTextColor={theme.textMuted}
+                        value={secondaryInput}
+                        onChangeText={setSecondaryInput}
+                        autoCapitalize="none"
+                        keyboardType="email-address"
+                      />
+                      <Text style={[styles.mfaClarificationText, { color: theme.textMuted, marginTop: 4, marginBottom: 12 }]}>
+                        * A 6-digit confirmation PIN will be dispatched to verify ownership.
+                      </Text>
+                      <View style={{ flexDirection: 'row', gap: 10, justifyContent: 'flex-end' }}>
+                        <TouchableOpacity
+                          style={[styles.cancelDeleteBtn, { borderColor: theme.cardBorder }]}
+                          onPress={() => {
+                            setIsSettingUpTwoStep(false);
+                            setSecondaryInput('');
+                          }}
+                        >
+                          <Text style={{ color: theme.textSecondary, fontWeight: '700' }}>Cancel</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={[styles.confirmEnableBtn, { backgroundColor: theme.primary }]}
+                          onPress={handleSendSecondaryCode}
+                          disabled={isSendingCode}
+                        >
+                          {isSendingCode ? (
+                            <ActivityIndicator color="#000000" size="small" />
+                          ) : (
+                            <Text style={{ color: '#000000', fontWeight: '800' }}>Send 6-Digit Code</Text>
+                          )}
+                        </TouchableOpacity>
+                      </View>
+                    </>
+                  ) : (
+                    <>
+                      <Text style={[styles.emailDetailLabel, { color: theme.textMuted, marginBottom: 6 }]}>
+                        ENTER 6-DIGIT VERIFICATION CODE
+                      </Text>
+                      <Text style={{ color: theme.textSecondary, fontSize: 12, marginBottom: 10 }}>
+                        Sent to: <Text style={{ color: theme.text, fontWeight: 'bold' }}>{secondaryEmail}</Text>
+                      </Text>
+                      <TextInput
+                        style={[styles.input, { backgroundColor: theme.surface, color: theme.text, borderColor: theme.primary, letterSpacing: 8, textAlign: 'center', fontSize: 20, fontWeight: 'bold' }]}
+                        placeholder="••••••"
+                        placeholderTextColor={theme.textMuted}
+                        value={sixDigitCode}
+                        onChangeText={setSixDigitCode}
+                        keyboardType="number-pad"
+                        maxLength={6}
+                      />
+                      <View style={{ flexDirection: 'row', gap: 10, justifyContent: 'flex-end', marginTop: 12 }}>
+                        <TouchableOpacity
+                          style={[styles.cancelDeleteBtn, { borderColor: theme.cardBorder }]}
+                          onPress={() => setTwoStepSubStep('EMAIL')}
+                        >
+                          <Text style={{ color: theme.textSecondary, fontWeight: '700' }}>Back</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={[styles.confirmEnableBtn, { backgroundColor: theme.primary }]}
+                          onPress={handleVerifySecondaryCode}
+                          disabled={isSavingTwoStep}
+                        >
+                          {isSavingTwoStep ? (
+                            <ActivityIndicator color="#000000" size="small" />
+                          ) : (
+                            <Text style={{ color: '#000000', fontWeight: '800' }}>Confirm & Enable</Text>
+                          )}
+                        </TouchableOpacity>
+                      </View>
+                    </>
+                  )}
                 </View>
               ) : (
-                <TouchableOpacity
-                  style={[styles.enableTwoStepBtn, { backgroundColor: theme.primary }]}
-                  onPress={() => setIsSettingUpTwoStep(true)}
-                  activeOpacity={0.85}
-                >
-                  <Text style={styles.enableTwoStepBtnText}>+ Enable 2-Step Security Verification</Text>
-                </TouchableOpacity>
+                <View style={{ marginTop: 10 }}>
+                  {isPendingVerification && (
+                    <View style={{ marginBottom: 10 }}>
+                      <Text style={{ color: '#f5a623', fontSize: 12, marginBottom: 4 }}>
+                        A verification code was previously sent to: <Text style={{ fontWeight: 'bold' }}>{secondaryEmail}</Text>
+                      </Text>
+                      <TouchableOpacity
+                        style={[styles.confirmEnableBtn, { backgroundColor: '#2b2114', borderColor: '#f5a623', borderWidth: 1, alignSelf: 'flex-start' }]}
+                        onPress={() => {
+                          setTwoStepSubStep('CODE');
+                          setIsSettingUpTwoStep(true);
+                        }}
+                      >
+                        <Text style={{ color: '#f5a623', fontWeight: '800', fontSize: 12 }}>Enter Verification Code</Text>
+                      </TouchableOpacity>
+                    </View>
+                  )}
+                  <TouchableOpacity
+                    style={[styles.enableTwoStepBtn, { backgroundColor: theme.primary }]}
+                    onPress={() => {
+                      setTwoStepSubStep('EMAIL');
+                      setIsSettingUpTwoStep(true);
+                    }}
+                    activeOpacity={0.85}
+                  >
+                    <Text style={styles.enableTwoStepBtnText}>
+                      {isPendingVerification ? '↻ Change Secondary Security Email' : '+ Enable 2-Step Security Verification'}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
               )}
 
               {/* Architecture Clarification Notice (Requirements 68, 70, 73) */}
@@ -803,5 +1053,41 @@ const styles = StyleSheet.create({
     fontSize: 10,
     lineHeight: 14,
     fontStyle: 'italic',
+  },
+  resendVerifyBtn: {
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 6,
+    borderWidth: 1,
+    marginTop: 6,
+    marginBottom: 4,
+    alignSelf: 'flex-start',
+  },
+  sessionBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+    borderWidth: 1,
+  },
+  settingSwitchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 8,
+  },
+  autolockOptionRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  autolockPill: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 6,
+    borderWidth: 1,
+  },
+  autolockPillText: {
+    fontSize: 12,
+    fontWeight: '700',
   },
 });

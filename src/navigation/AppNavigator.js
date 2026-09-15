@@ -107,6 +107,14 @@ export default function AppNavigator() {
           tabBarLabel: 'The Board',
           tabBarIcon: () => <Text style={{ fontSize: 18 }}>🎬</Text>,
         }}
+        listeners={({ navigation }) => ({
+          tabPress: (e) => {
+            e.preventDefault();
+            navigation.navigate('TheBoardTab', {
+              screen: 'RoomsList',
+            });
+          },
+        })}
       />
 
       {/* 3. REQUESTS */}

@@ -9,17 +9,39 @@ import {
   Switch,
   Alert,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { doc, updateDoc, serverTimestamp } from 'firebase/firestore';
+import { db } from '../../../firebaseConfig';
+import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
 import { useToast } from '../../context/ToastContext';
 
+const PRIVACY_STORAGE_KEY = '@filmroom_privacy_settings';
+
 const VISIBILITY_MODES = [
-  { key: 'PUBLIC', label: 'Public', desc: 'Visible in Explore directory to all verified filmmakers' },
-  { key: 'CONNECTIONS', label: 'Connections Only', desc: 'Visible only to accepted professional contacts' },
-  { key: 'PRIVATE', label: 'Private', desc: 'Hidden from discovery; visible only via direct project link' },
+  { key: 'PUBLIC', label: 'Public Discovery', desc: 'Visible in Explore directory to all verified filmmakers' },
+  { key: 'CONNECTIONS', label: 'Connections Only', desc: 'Visible only to accepted contacts and team members' },
+  { key: 'PRIVATE', label: 'Private (Direct Code Only)', desc: 'Searchable solely via your 10-character FilmRoom Code' },
+];
+
+const THREE_TIER_OPTIONS = [
+  { key: 'PUBLIC', label: 'Public' },
+  { key: 'CONNECTIONS', label: 'Connections' },
+  { key: 'PRIVATE', label: 'Private' },
+];
+
+const MESSAGING_PERMISSIONS = [
+  { key: 'ANYONE', label: 'Anyone on FilmRoom', desc: 'Any verified filmmaker can initiate an inquiry or DM' },
+  { key: 'CONNECTIONS_ONLY', label: 'Connections Only', desc: 'Only approved connections can message you' },
+  { key: 'NOBODY', label: 'Nobody (Disabled)', desc: 'Direct inquiries and requests disabled' },
 ];
 
 const DEFAULT_PRIVACY = {
-  visibility: 'PUBLIC',
+  publicProfile: true, // Master Explore switch (Requirement 9)
+  visibility: 'PUBLIC', // 'PUBLIC' | 'CONNECTIONS' | 'PRIVATE'
+  showreelVisibility: 'PUBLIC', // 'PUBLIC' | 'CONNECTIONS' | 'PRIVATE' (Requirement 9)
+  gearKitVisibility: 'PUBLIC', // 'PUBLIC' | 'CONNECTIONS' | 'PRIVATE' (Requirement 9)
+  messagingPermissions: 'ANYONE', // 'ANYONE' | 'CONNECTIONS_ONLY' | 'NOBODY' (Requirement 9)
   hidePhone: true,
   hideEmail: true,
   allowInquiries: true,
@@ -32,25 +54,60 @@ const DEFAULT_PRIVACY = {
 
 export default function PrivacyModal({ visible, onClose, navigation }) {
   const { theme } = useTheme();
+  const { currentUser, userProfile } = useAuth();
   const { showToast } = useToast();
 
-  // Saved privacy settings & draft staging
   const [savedSettings, setSavedSettings] = useState(DEFAULT_PRIVACY);
   const [draftSettings, setDraftSettings] = useState(DEFAULT_PRIVACY);
 
   useEffect(() => {
     if (visible) {
-      setDraftSettings(savedSettings);
+      AsyncStorage.getItem(PRIVACY_STORAGE_KEY).then((stored) => {
+        if (stored) {
+          try {
+            const parsed = JSON.parse(stored);
+            setSavedSettings((prev) => ({ ...prev, ...parsed }));
+            setDraftSettings((prev) => ({ ...prev, ...parsed }));
+          } catch (_) {}
+        } else if (userProfile?.privacySettings) {
+          setSavedSettings((prev) => ({ ...prev, ...userProfile.privacySettings }));
+          setDraftSettings((prev) => ({ ...prev, ...userProfile.privacySettings }));
+        }
+      });
     }
-  }, [visible]);
+  }, [visible, userProfile?.privacySettings]);
 
   const updateDraft = (key, value) => {
     setDraftSettings((prev) => ({ ...prev, [key]: value }));
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     setSavedSettings(draftSettings);
-    showToast({ type: 'success', title: 'Privacy Updated', message: 'Profile visibility and contact privacy settings saved.' });
+    try {
+      await AsyncStorage.setItem(PRIVACY_STORAGE_KEY, JSON.stringify(draftSettings));
+    } catch (_) {}
+
+    if (currentUser?.uid) {
+      try {
+        await updateDoc(doc(db, 'users', currentUser.uid), {
+          privacySettings: draftSettings,
+          publicProfile: draftSettings.publicProfile,
+          visibility: draftSettings.visibility,
+          showreelVisibility: draftSettings.showreelVisibility,
+          gearKitVisibility: draftSettings.gearKitVisibility,
+          messagingPermissions: draftSettings.messagingPermissions,
+          updatedAt: serverTimestamp(),
+        });
+      } catch (err) {
+        console.warn('Privacy cloud save notice:', err.message);
+      }
+    }
+
+    showToast({
+      type: 'success',
+      title: 'Privacy Updated',
+      message: 'Profile visibility, messaging, and asset privacy settings saved.',
+    });
     onClose();
   };
 
@@ -82,9 +139,26 @@ export default function PrivacyModal({ visible, onClose, navigation }) {
           </View>
 
           <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
-            {/* Profile Visibility */}
-            <Text style={[styles.sectionHeading, { color: theme.textSecondary }]}>PROFILE VISIBILITY</Text>
+            {/* 1. PUBLIC PROFILE MASTER SWITCH */}
+            <Text style={[styles.sectionHeading, { color: theme.textSecondary }]}>EXPLORE DIRECTORY VISIBILITY</Text>
             <View style={[styles.settingGroup, { backgroundColor: theme.background, borderColor: theme.cardBorder }]}>
+              <View style={styles.switchRow}>
+                <View style={styles.switchInfo}>
+                  <Text style={[styles.switchLabel, { color: theme.text }]}>Public Profile</Text>
+                  <Text style={[styles.switchDesc, { color: theme.textMuted }]}>
+                    When ON, you appear in Explore directory. When OFF, you are hidden from search.
+                  </Text>
+                </View>
+                <Switch
+                  value={draftSettings.publicProfile}
+                  onValueChange={(v) => updateDraft('publicProfile', v)}
+                  trackColor={{ false: '#242830', true: theme.primary }}
+                  thumbColor="#ffffff"
+                />
+              </View>
+
+              <View style={styles.divider} />
+
               {VISIBILITY_MODES.map((mode, index) => {
                 const isSelected = draftSettings.visibility === mode.key;
                 return (
@@ -108,9 +182,117 @@ export default function PrivacyModal({ visible, onClose, navigation }) {
               })}
             </View>
 
-            {/* Contact Information Privacy */}
+            {/* 2. ASSET VISIBILITY (SHOWREEL & GEAR KIT) */}
             <Text style={[styles.sectionHeading, { color: theme.textSecondary, marginTop: 18 }]}>
-              CONTACT INFORMATION
+              ASSET & PORTFOLIO PRIVACY
+            </Text>
+            <View style={[styles.settingGroup, { backgroundColor: theme.background, borderColor: theme.cardBorder }]}>
+              {/* Showreel Visibility */}
+              <View style={styles.tierContainer}>
+                <Text style={[styles.tierHeaderTitle, { color: theme.text }]}>Showreel Visibility</Text>
+                <Text style={[styles.tierHeaderDesc, { color: theme.textMuted }]}>
+                  Control who can stream your video reels
+                </Text>
+                <View style={styles.tierBtnRow}>
+                  {THREE_TIER_OPTIONS.map((opt) => {
+                    const isSelected = (draftSettings.showreelVisibility || 'PUBLIC') === opt.key;
+                    return (
+                      <TouchableOpacity
+                        key={opt.key}
+                        style={[
+                          styles.tierBtn,
+                          {
+                            backgroundColor: isSelected ? theme.primary : theme.surface,
+                            borderColor: isSelected ? theme.primary : theme.cardBorder,
+                          },
+                        ]}
+                        onPress={() => updateDraft('showreelVisibility', opt.key)}
+                        activeOpacity={0.7}
+                      >
+                        <Text
+                          style={[
+                            styles.tierBtnText,
+                            { color: isSelected ? '#000000' : theme.textSecondary },
+                          ]}
+                        >
+                          {opt.label}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              </View>
+
+              <View style={styles.divider} />
+
+              {/* Gear Kit Visibility */}
+              <View style={styles.tierContainer}>
+                <Text style={[styles.tierHeaderTitle, { color: theme.text }]}>Gear Kit Visibility</Text>
+                <Text style={[styles.tierHeaderDesc, { color: theme.textMuted }]}>
+                  Control who can inspect your camera, lighting & sound equipment
+                </Text>
+                <View style={styles.tierBtnRow}>
+                  {THREE_TIER_OPTIONS.map((opt) => {
+                    const isSelected = (draftSettings.gearKitVisibility || 'PUBLIC') === opt.key;
+                    return (
+                      <TouchableOpacity
+                        key={opt.key}
+                        style={[
+                          styles.tierBtn,
+                          {
+                            backgroundColor: isSelected ? theme.primary : theme.surface,
+                            borderColor: isSelected ? theme.primary : theme.cardBorder,
+                          },
+                        ]}
+                        onPress={() => updateDraft('gearKitVisibility', opt.key)}
+                        activeOpacity={0.7}
+                      >
+                        <Text
+                          style={[
+                            styles.tierBtnText,
+                            { color: isSelected ? '#000000' : theme.textSecondary },
+                          ]}
+                        >
+                          {opt.label}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              </View>
+            </View>
+
+            {/* 3. MESSAGING & CONTACT PERMISSIONS */}
+            <Text style={[styles.sectionHeading, { color: theme.textSecondary, marginTop: 18 }]}>
+              INQUIRIES & DIRECT MESSAGES
+            </Text>
+            <View style={[styles.settingGroup, { backgroundColor: theme.background, borderColor: theme.cardBorder }]}>
+              {MESSAGING_PERMISSIONS.map((perm, index) => {
+                const isSelected = (draftSettings.messagingPermissions || 'ANYONE') === perm.key;
+                return (
+                  <View key={perm.key}>
+                    {index > 0 && <View style={styles.divider} />}
+                    <TouchableOpacity
+                      style={styles.radioRow}
+                      onPress={() => updateDraft('messagingPermissions', perm.key)}
+                      activeOpacity={0.7}
+                    >
+                      <View style={[styles.radioCircle, { borderColor: isSelected ? theme.primary : theme.textMuted }]}>
+                        {isSelected && <View style={[styles.radioDot, { backgroundColor: theme.primary }]} />}
+                      </View>
+                      <View style={styles.radioInfo}>
+                        <Text style={[styles.radioLabel, { color: theme.text }]}>{perm.label}</Text>
+                        <Text style={[styles.radioDesc, { color: theme.textMuted }]}>{perm.desc}</Text>
+                      </View>
+                    </TouchableOpacity>
+                  </View>
+                );
+              })}
+            </View>
+
+            {/* 4. CONTACT INFORMATION PROTECTION */}
+            <Text style={[styles.sectionHeading, { color: theme.textSecondary, marginTop: 18 }]}>
+              CONTACT PROTECTION
             </Text>
             <View style={[styles.settingGroup, { backgroundColor: theme.background, borderColor: theme.cardBorder }]}>
               <View style={styles.switchRow}>
@@ -134,7 +316,7 @@ export default function PrivacyModal({ visible, onClose, navigation }) {
                 <View style={styles.switchInfo}>
                   <Text style={[styles.switchLabel, { color: theme.text }]}>Hide Email Address</Text>
                   <Text style={[styles.switchDesc, { color: theme.textMuted }]}>
-                    Inquiries route through FilmRoom requests
+                    Inquiries route strictly through FilmRoom requests
                   </Text>
                 </View>
                 <Switch
@@ -144,51 +326,17 @@ export default function PrivacyModal({ visible, onClose, navigation }) {
                   thumbColor="#ffffff"
                 />
               </View>
-
-              <View style={styles.divider} />
-
-              <View style={styles.switchRow}>
-                <View style={styles.switchInfo}>
-                  <Text style={[styles.switchLabel, { color: theme.text }]}>Allow Professional Inquiries</Text>
-                  <Text style={[styles.switchDesc, { color: theme.textMuted }]}>
-                    Permit verified directors and producers to send requests
-                  </Text>
-                </View>
-                <Switch
-                  value={draftSettings.allowInquiries}
-                  onValueChange={(v) => updateDraft('allowInquiries', v)}
-                  trackColor={{ false: '#242830', true: theme.primary }}
-                  thumbColor="#ffffff"
-                />
-              </View>
-
-              <View style={styles.divider} />
-
-              <View style={styles.switchRow}>
-                <View style={styles.switchInfo}>
-                  <Text style={[styles.switchLabel, { color: theme.text }]}>Allow Connection Requests</Text>
-                  <Text style={[styles.switchDesc, { color: theme.textMuted }]}>
-                    Enable filmmaker-to-filmmaker networking
-                  </Text>
-                </View>
-                <Switch
-                  value={draftSettings.allowConnections}
-                  onValueChange={(v) => updateDraft('allowConnections', v)}
-                  trackColor={{ false: '#242830', true: theme.primary }}
-                  thumbColor="#ffffff"
-                />
-              </View>
             </View>
 
-            {/* Professional Information */}
+            {/* 5. PROFILE DETAILS */}
             <Text style={[styles.sectionHeading, { color: theme.textSecondary, marginTop: 18 }]}>
-              PROFESSIONAL INFORMATION
+              PROFILE DETAILS
             </Text>
             <View style={[styles.settingGroup, { backgroundColor: theme.background, borderColor: theme.cardBorder }]}>
               <View style={styles.switchRow}>
                 <View style={styles.switchInfo}>
                   <Text style={[styles.switchLabel, { color: theme.text }]}>Show Availability Status</Text>
-                  <Text style={[styles.switchDesc, { color: theme.textMuted }]}>Display Available / Busy / Date pill</Text>
+                  <Text style={[styles.switchDesc, { color: theme.textMuted }]}>Display Available / Busy status pill</Text>
                 </View>
                 <Switch
                   value={draftSettings.showAvailability}
@@ -227,62 +375,6 @@ export default function PrivacyModal({ visible, onClose, navigation }) {
                   thumbColor="#ffffff"
                 />
               </View>
-
-              <View style={styles.divider} />
-
-              <View style={styles.switchRow}>
-                <View style={styles.switchInfo}>
-                  <Text style={[styles.switchLabel, { color: theme.text }]}>Show Portfolio Links</Text>
-                  <Text style={[styles.switchDesc, { color: theme.textMuted }]}>Showreel and IMDb links</Text>
-                </View>
-                <Switch
-                  value={draftSettings.showPortfolio}
-                  onValueChange={(v) => updateDraft('showPortfolio', v)}
-                  trackColor={{ false: '#242830', true: theme.primary }}
-                  thumbColor="#ffffff"
-                />
-              </View>
-            </View>
-
-            {/* REALISTIC COMING SOON FEATURE */}
-            <Text style={[styles.sectionHeading, { color: theme.textSecondary, marginTop: 18 }]}>SECURITY & RIGHTS PROTECTION</Text>
-            <View style={[styles.comingSoonCard, { backgroundColor: theme.background, borderColor: theme.cardBorder }]}>
-              <View style={styles.comingSoonHeader}>
-                <Text style={[styles.comingSoonTitle, { color: theme.text }]}>Forensic Watermarked Screeners</Text>
-                <View style={styles.comingSoonBadge}>
-                  <Text style={styles.comingSoonBadgeText}>COMING SOON</Text>
-                </View>
-              </View>
-              <Text style={[styles.comingSoonDesc, { color: theme.textMuted }]}>
-                Dynamic forensic burnt-in viewer email, IP, and timestamp overlay on all showreel views and script PDF downloads to prevent unauthorized leaks and protect agency clients.
-              </Text>
-            </View>
-
-            {/* Safety Actions */}
-            <Text style={[styles.sectionHeading, { color: theme.textSecondary, marginTop: 18 }]}>SAFETY & MODERATION</Text>
-            <View style={[styles.settingGroup, { backgroundColor: theme.background, borderColor: theme.cardBorder }]}>
-              <TouchableOpacity
-                style={styles.actionLinkRow}
-                onPress={() => {
-                  Alert.alert(
-                    'Blocked Users',
-                    'To unblock or manage blocked filmmakers, visit their profile or open Direct Messages. Blocked users cannot send requests or messages to you.'
-                  );
-                }}
-              >
-                <Text style={[styles.actionLinkLabel, { color: theme.text }]}>🚫 Manage Blocked Users</Text>
-                <Text style={[styles.actionLinkArrow, { color: theme.primary }]}>→</Text>
-              </TouchableOpacity>
-
-              <View style={styles.divider} />
-
-              <TouchableOpacity
-                style={styles.actionLinkRow}
-                onPress={() => Alert.alert('Report Content', 'To report harassment or impersonation, contact trust@filmroom.app')}
-              >
-                <Text style={[styles.actionLinkLabel, { color: theme.text }]}>🚩 Report an Issue</Text>
-                <Text style={[styles.actionLinkArrow, { color: theme.primary }]}>→</Text>
-              </TouchableOpacity>
             </View>
 
             {/* Save / Cancel / Restore Defaults Bottom Controls */}
@@ -351,7 +443,7 @@ const styles = StyleSheet.create({
   },
   sectionHeading: {
     fontSize: 11,
-    fontWeight: '850',
+    fontWeight: '800',
     letterSpacing: 0.8,
     marginBottom: 8,
   },
@@ -367,18 +459,18 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
   },
   radioCircle: {
-    width: 18,
-    height: 18,
-    borderRadius: 9,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
     borderWidth: 2,
     justifyContent: 'center',
     alignItems: 'center',
-    marginRight: 12,
+    marginRight: 14,
   },
   radioDot: {
-    width: 9,
-    height: 9,
-    borderRadius: 4.5,
+    width: 10,
+    height: 10,
+    borderRadius: 5,
   },
   radioInfo: {
     flex: 1,
@@ -390,6 +482,7 @@ const styles = StyleSheet.create({
   radioDesc: {
     fontSize: 11,
     marginTop: 2,
+    lineHeight: 15,
   },
   switchRow: {
     flexDirection: 'row',
@@ -399,7 +492,7 @@ const styles = StyleSheet.create({
   },
   switchInfo: {
     flex: 1,
-    paddingRight: 12,
+    paddingRight: 16,
   },
   switchLabel: {
     fontSize: 14,
@@ -408,61 +501,42 @@ const styles = StyleSheet.create({
   switchDesc: {
     fontSize: 11,
     marginTop: 2,
+    lineHeight: 15,
   },
   divider: {
     height: 1,
     backgroundColor: '#242830',
   },
-  comingSoonCard: {
-    borderRadius: 12,
-    borderWidth: 1,
-    padding: 14,
-    marginBottom: 10,
-  },
-  comingSoonHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 6,
-  },
-  comingSoonTitle: {
-    fontSize: 13,
-    fontWeight: '700',
-  },
-  comingSoonBadge: {
-    backgroundColor: '#3b82f620',
-    borderColor: '#3b82f6',
-    borderWidth: 1,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4,
-  },
-  comingSoonBadgeText: {
-    color: '#60a5fa',
-    fontSize: 9,
-    fontWeight: '900',
-    letterSpacing: 0.6,
-  },
-  comingSoonDesc: {
-    fontSize: 11,
-    lineHeight: 16,
-  },
-  actionLinkRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
+  tierContainer: {
     paddingVertical: 14,
   },
-  actionLinkLabel: {
+  tierHeaderTitle: {
     fontSize: 14,
-    fontWeight: '600',
+    fontWeight: '700',
   },
-  actionLinkArrow: {
-    fontSize: 16,
-    fontWeight: 'bold',
+  tierHeaderDesc: {
+    fontSize: 11,
+    marginTop: 2,
+    marginBottom: 10,
+  },
+  tierBtnRow: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  tierBtn: {
+    flex: 1,
+    paddingVertical: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  tierBtnText: {
+    fontSize: 12,
+    fontWeight: '800',
   },
   footerControls: {
-    marginTop: 20,
+    marginTop: 24,
     alignItems: 'center',
   },
   saveCancelRow: {

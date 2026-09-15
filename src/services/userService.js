@@ -251,6 +251,18 @@ export const reserveUsernameAndCreateUser = async ({
     createdAt: serverTimestamp(),
   });
 
+  // 3. Reservation document in /registered_emails for availability check
+  if (email && email.trim()) {
+    const cleanEmail = email.trim().toLowerCase();
+    const emailKey = encodeURIComponent(cleanEmail).replace(/\./g, '%2E');
+    const emailRef = doc(db, 'registered_emails', emailKey);
+    batch.set(emailRef, {
+      uid: user.uid,
+      email: cleanEmail,
+      createdAt: serverTimestamp(),
+    });
+  }
+
   await batch.commit();
   return { uid: user.uid, filmRoomId, username: cleanUsername };
 };

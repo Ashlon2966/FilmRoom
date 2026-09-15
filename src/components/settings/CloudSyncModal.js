@@ -13,7 +13,15 @@ import {
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
-import { syncNow, getPendingQueueCount, getLastSyncMetadata } from '../../services/syncService';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import {
+  syncNow,
+  pullFromCloud,
+  getPendingQueueCount,
+  getLastSyncMetadata,
+} from '../../services/syncService';
+
+const SYNC_PREFS_KEY = '@filmroom_sync_prefs';
 
 const DEFAULT_SYNC_PREFS = {
   autoSync: true,
@@ -29,6 +37,7 @@ export default function CloudSyncModal({ visible, onClose }) {
   const { showToast } = useToast();
 
   const [isSyncing, setIsSyncing] = useState(false);
+  const [isPulling, setIsPulling] = useState(false);
   const [lastSynced, setLastSynced] = useState('Checking...');
   const [pendingChanges, setPendingChanges] = useState(0);
 
@@ -38,7 +47,15 @@ export default function CloudSyncModal({ visible, onClose }) {
 
   useEffect(() => {
     if (visible) {
-      setDraftPrefs(savedPrefs);
+      AsyncStorage.getItem(SYNC_PREFS_KEY).then((stored) => {
+        if (stored) {
+          try {
+            const parsed = JSON.parse(stored);
+            setSavedPrefs(parsed);
+            setDraftPrefs(parsed);
+          } catch (_) {}
+        }
+      });
       getPendingQueueCount().then(setPendingChanges);
       getLastSyncMetadata().then((ts) => {
         if (ts) {
@@ -80,8 +97,42 @@ export default function CloudSyncModal({ visible, onClose }) {
     }
   };
 
-  const handleSaveChanges = () => {
+  const handlePullFromCloud = async () => {
+    setIsPulling(true);
+    try {
+      const result = await pullFromCloud({ userId: currentUser?.uid });
+      const count = await getPendingQueueCount();
+      setPendingChanges(count);
+      const now = new Date();
+      setLastSynced(
+        `${now.toLocaleDateString([], { month: 'short', day: 'numeric' })}, ${now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+      );
+
+      if (result.updatedCount === 0) {
+        showToast({
+          type: 'info',
+          title: 'Up to Date',
+          message: 'Already up to date with cloud.',
+        });
+      } else {
+        showToast({
+          type: 'success',
+          title: 'Cloud Pull Complete',
+          message: `${result.updatedCount} item(s) updated from cloud.`,
+        });
+      }
+    } catch (err) {
+      showToast({ type: 'error', message: err.message || 'Unable to pull from cloud.' });
+    } finally {
+      setIsPulling(false);
+    }
+  };
+
+  const handleSaveChanges = async () => {
     setSavedPrefs(draftPrefs);
+    try {
+      await AsyncStorage.setItem(SYNC_PREFS_KEY, JSON.stringify(draftPrefs));
+    } catch (_) {}
     showToast({ type: 'success', title: 'Sync Updated', message: 'Sync preferences updated.' });
     onClose();
   };
@@ -95,6 +146,17 @@ export default function CloudSyncModal({ visible, onClose }) {
     setDraftPrefs(DEFAULT_SYNC_PREFS);
     showToast({ type: 'info', message: 'Sync preferences reset to factory defaults.' });
   };
+
+  let syncStatusLabel = 'Synced';
+  let syncStatusColor = theme.success || '#4ade80';
+
+  if (isSyncing || isPulling) {
+    syncStatusLabel = 'Syncing...';
+    syncStatusColor = theme.primary;
+  } else if (pendingChanges > 0) {
+    syncStatusLabel = 'Changes Pending';
+    syncStatusColor = theme.primary;
+  }
 
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
@@ -117,8 +179,8 @@ export default function CloudSyncModal({ visible, onClose }) {
             {/* Status Card */}
             <View style={[styles.statusCard, { backgroundColor: theme.background, borderColor: theme.cardBorder }]}>
               <View style={styles.connectionIndicatorRow}>
-                <View style={[styles.statusDot, { backgroundColor: theme.success || '#4ade80' }]} />
-                <Text style={[styles.statusText, { color: theme.success || '#4ade80' }]}>Connected</Text>
+                <View style={[styles.statusDot, { backgroundColor: syncStatusColor }]} />
+                <Text style={[styles.statusText, { color: syncStatusColor }]}>{syncStatusLabel}</Text>
               </View>
 
               <View style={styles.metricsGrid}>
@@ -137,22 +199,45 @@ export default function CloudSyncModal({ visible, onClose }) {
 
               <View style={styles.statusFooter}>
                 <Text style={[styles.statusFooterText, { color: theme.textMuted }]}>
-                  Cloud Status: <Text style={{ color: theme.text, fontWeight: '700' }}>Ready</Text>
+                  Cloud Engine: <Text style={{ color: theme.text, fontWeight: '700' }}>Firestore Live</Text>
                 </Text>
               </View>
 
-              <TouchableOpacity
-                style={[styles.syncNowBtn, { backgroundColor: theme.primary }]}
-                onPress={handleSyncNow}
-                disabled={isSyncing}
-                activeOpacity={0.8}
-              >
-                {isSyncing ? (
-                  <ActivityIndicator color="#000000" size="small" />
-                ) : (
-                  <Text style={styles.syncNowBtnText}>Sync Now</Text>
-                )}
-              </TouchableOpacity>
+              <View style={{ flexDirection: 'row', gap: 10 }}>
+                <TouchableOpacity
+                  style={[styles.syncNowBtn, { flex: 1, backgroundColor: theme.primary }]}
+                  onPress={handleSyncNow}
+                  disabled={isSyncing || isPulling}
+                  activeOpacity={0.8}
+                >
+                  {isSyncing ? (
+                    <ActivityIndicator color="#000000" size="small" />
+                  ) : (
+                    <Text style={styles.syncNowBtnText}>Push to Cloud</Text>
+                  )}
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[
+                    styles.syncNowBtn,
+                    {
+                      flex: 1,
+                      backgroundColor: theme.surface,
+                      borderWidth: 1,
+                      borderColor: theme.cardBorder,
+                    },
+                  ]}
+                  onPress={handlePullFromCloud}
+                  disabled={isSyncing || isPulling}
+                  activeOpacity={0.8}
+                >
+                  {isPulling ? (
+                    <ActivityIndicator color={theme.text} size="small" />
+                  ) : (
+                    <Text style={[styles.syncNowBtnText, { color: theme.text }]}>Pull from Cloud</Text>
+                  )}
+                </TouchableOpacity>
+              </View>
             </View>
 
             {/* Sync Settings */}

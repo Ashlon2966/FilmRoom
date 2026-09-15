@@ -1,6 +1,8 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { useColorScheme } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { doc, updateDoc, serverTimestamp } from 'firebase/firestore';
+import { auth, db } from '../../firebaseConfig';
 import { darkTheme, lightTheme, getCustomTheme } from '../styles/themes';
 
 const APPEARANCE_STORAGE_KEY = '@filmroom_appearance_settings';
@@ -57,7 +59,7 @@ export const ThemeProvider = ({ children }) => {
   const isDark = effectiveMode !== 'LIGHT';
   const theme = getCustomTheme(effectiveMode, settings.accentColor);
 
-  // Save new appearance settings and persist to AsyncStorage
+  // Save new appearance settings and persist to AsyncStorage & Firestore (Requirement 6)
   const saveAppearanceSettings = async (newSettings) => {
     const updated = { ...settings, ...newSettings };
     setSettings(updated);
@@ -65,6 +67,18 @@ export const ThemeProvider = ({ children }) => {
       await AsyncStorage.setItem(APPEARANCE_STORAGE_KEY, JSON.stringify(updated));
     } catch (_) {
       // Storage error non-critical
+    }
+
+    if (auth.currentUser?.uid) {
+      try {
+        await updateDoc(doc(db, 'users', auth.currentUser.uid), {
+          appearanceSettings: updated,
+          themeMode: updated.themeMode,
+          updatedAt: serverTimestamp(),
+        });
+      } catch (err) {
+        // Non-blocking if offline
+      }
     }
   };
 
@@ -74,6 +88,16 @@ export const ThemeProvider = ({ children }) => {
     try {
       await AsyncStorage.removeItem(APPEARANCE_STORAGE_KEY);
     } catch (_) {}
+
+    if (auth.currentUser?.uid) {
+      try {
+        await updateDoc(doc(db, 'users', auth.currentUser.uid), {
+          appearanceSettings: DEFAULT_SETTINGS,
+          themeMode: DEFAULT_SETTINGS.themeMode,
+          updatedAt: serverTimestamp(),
+        });
+      } catch (_) {}
+    }
   };
 
   return (

@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, ActivityIndicator, StyleSheet } from 'react-native';
+import { View, Text, Image, ActivityIndicator, StyleSheet } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { useAuth } from '../context/AuthContext';
@@ -16,8 +16,16 @@ export default function RootNavigator() {
 
   if (loading) {
     return (
-      <View style={[styles.loading, { backgroundColor: theme.background }]}>
-        <ActivityIndicator size="large" color={theme.primary} />
+      <View style={[styles.loading, { backgroundColor: theme?.background || '#0c0d0e' }]}>
+        <Image
+          source={require('../../assets/icon.png')}
+          style={{ width: 84, height: 84, borderRadius: 18, marginBottom: 16 }}
+          resizeMode="contain"
+        />
+        <Text style={[styles.splashTitle, { color: theme?.text || '#ffffff' }]}>
+          FILM<Text style={{ color: theme?.primary || '#f5a623' }}>ROOM</Text>
+        </Text>
+        <ActivityIndicator size="small" color={theme?.primary || '#f5a623'} style={{ marginTop: 20 }} />
       </View>
     );
   }
@@ -39,4 +47,9 @@ export default function RootNavigator() {
 
 const styles = StyleSheet.create({
   loading: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  splashTitle: {
+    fontSize: 22,
+    fontWeight: '900',
+    letterSpacing: 2,
+  },
 });

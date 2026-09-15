@@ -17,13 +17,17 @@ import { db } from '../../../firebaseConfig';
 import { useAuth } from '../../context/AuthContext';
 import { useRoom } from '../../context/RoomContext';
 import { useTheme } from '../../context/ThemeContext';
+import { useToast } from '../../context/ToastContext';
 import StageProgressBar from '../../components/StageProgressBar';
 import BackButton from '../../components/BackButton';
+import ConnectedAppsModal from '../../components/settings/ConnectedAppsModal';
+import { getConnectedApps, launchConnectedApp } from '../../services/connectedAppsService';
 
 export default function Stage2_ScreenplayScreen({ navigation, route }) {
   const { currentUser, userProfile } = useAuth();
   const { activeRoomId, roomData, setProductionStage, switchRoom } = useRoom();
   const { theme } = useTheme();
+  const { showToast } = useToast();
 
   // Sync route param roomId with active room
   useEffect(() => {
@@ -38,6 +42,23 @@ export default function Stage2_ScreenplayScreen({ navigation, route }) {
   const [pageCount, setPageCount] = useState('18');
   const [isSaving, setIsSaving] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
+
+  // Connected Apps in Stage 2 (Requirement 3.B)
+  const [connectedApps, setConnectedApps] = useState([]);
+  const [connectedAppsModalOpen, setConnectedAppsModalOpen] = useState(false);
+
+  const loadApps = async () => {
+    try {
+      const list = await getConnectedApps(currentUser?.uid);
+      setConnectedApps(list);
+    } catch (e) {
+      console.warn('Load apps error in Stage 2:', e.message);
+    }
+  };
+
+  useEffect(() => {
+    loadApps();
+  }, [currentUser?.uid, connectedAppsModalOpen]);
 
   const [stage2State, setStage2State] = useState({
     status: 'IN_REVISION',
@@ -135,14 +156,47 @@ export default function Stage2_ScreenplayScreen({ navigation, route }) {
     }
   };
 
+  const handleLaunchApp = async (app) => {
+    const res = await launchConnectedApp(app);
+    if (res?.success) {
+      showToast({ type: 'success', title: 'App Launched', message: `Opened ${app.name}.` });
+    }
+  };
+
   return (
     <View style={[styles.mainScreen, { backgroundColor: theme?.background || '#0c0d0e' }]}>
       {/* 1. STATIONARY TOP SECTION */}
       <View style={[styles.stationaryHeader, { backgroundColor: theme?.card || '#181b1f', borderColor: theme?.cardBorder || '#242830' }]}>
         <View style={styles.topNavRow}>
-          <BackButton onPress={() => navigation.navigate('TheBoardTab', { screen: 'RoomsList' })} />
+          <BackButton
+            onPress={() => {
+              if (navigation.canGoBack()) {
+                navigation.goBack();
+              } else {
+                navigation.navigate('TheBoardTab', { screen: 'RoomsList' });
+              }
+            }}
+          />
           <View style={{ flex: 1 }}>
-            <StageProgressBar currentStageIndex={1} onSelectStage={(idx) => setProductionStage(idx)} />
+            <StageProgressBar
+              currentStageIndex={1}
+              onSelectStage={(idx) => {
+                if (setProductionStage) setProductionStage(idx);
+                const stageScreens = [
+                  'Stage1_Ideation',
+                  'Stage2_Screenplay',
+                  'Stage3_PreProd',
+                  'Stage4_Production',
+                  'Stage5_PostProd',
+                ];
+                if (stageScreens[idx]) {
+                  navigation.navigate(stageScreens[idx], {
+                    roomId: activeRoomId,
+                    roomData,
+                  });
+                }
+              }}
+            />
           </View>
         </View>
 
@@ -206,6 +260,45 @@ export default function Stage2_ScreenplayScreen({ navigation, route }) {
           )}
         </View>
 
+        {/* CONNECTED SCREENPLAY APPS & TOOLS (Requirement 3.B) */}
+        <View style={[styles.connectedAppsCard, { backgroundColor: theme?.card || '#181b1f', borderColor: theme?.cardBorder || '#242830' }]}>
+          <View style={styles.connectedAppsHeader}>
+            <View>
+              <Text style={[styles.connectedAppsTitle, { color: theme?.text || '#ffffff' }]}>
+                CONNECTED SCREENPLAY TOOLS
+              </Text>
+              <Text style={[styles.connectedAppsSub, { color: theme?.textSecondary || '#9ca3af' }]}>
+                Open your writing suites and bibles directly from Stage 2
+              </Text>
+            </View>
+            <TouchableOpacity
+              style={[styles.manageAppsBtn, { borderColor: theme?.primary || '#f5a623' }]}
+              onPress={() => setConnectedAppsModalOpen(true)}
+            >
+              <Text style={[styles.manageAppsBtnText, { color: theme?.primary || '#f5a623' }]}>+ Tools</Text>
+            </TouchableOpacity>
+          </View>
+
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.appsChipScroll}>
+            {connectedApps.map((app) => (
+              <TouchableOpacity
+                key={app.id}
+                style={[styles.appChip, { backgroundColor: theme?.surface || '#121417', borderColor: theme?.cardBorder || '#242830' }]}
+                onPress={() => launchConnectedApp(app)}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.appChipIcon}>{app.icon || '📱'}</Text>
+                <View style={{ marginLeft: 8 }}>
+                  <Text style={[styles.appChipName, { color: theme?.text || '#ffffff' }]}>{app.name}</Text>
+                  <Text style={[styles.appChipType, { color: theme?.textMuted || '#64748b' }]}>
+                    {app.deepLink ? 'App' : 'Web'} ➔
+                  </Text>
+                </View>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+        </View>
+
         {/* Screenplay Editor Canvas */}
         <View style={[styles.editorCard, { backgroundColor: theme?.card || '#181b1f', borderColor: theme?.cardBorder || '#242830' }]}>
           <Text style={[styles.editorHeading, { color: theme?.textSecondary || '#9ca3af' }]}>
@@ -225,11 +318,23 @@ export default function Stage2_ScreenplayScreen({ navigation, route }) {
         {/* Progression to Stage 3 */}
         <TouchableOpacity
           style={[styles.advanceBtn, { backgroundColor: theme?.primary || '#f5a623', marginTop: 14 }]}
-          onPress={() => setProductionStage(2)}
+          onPress={() => {
+            if (setProductionStage) setProductionStage(2);
+            navigation.navigate('Stage3_PreProd', {
+              roomId: activeRoomId,
+              roomData,
+            });
+          }}
         >
           <Text style={styles.advanceBtnText}>Advance to Stage 3: Pre-Production ➔</Text>
         </TouchableOpacity>
       </ScrollView>
+
+      {/* Connected Apps Management Modal */}
+      <ConnectedAppsModal
+        visible={connectedAppsModalOpen}
+        onClose={() => setConnectedAppsModalOpen(false)}
+      />
     </View>
   );
 }
@@ -248,6 +353,59 @@ const styles = StyleSheet.create({
   toolsRow: { flexDirection: 'row', gap: 8, marginBottom: 14 },
   toolBtn: { flex: 1, paddingVertical: 10, borderRadius: 6, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
   toolBtnText: { fontSize: 12, fontWeight: '700' },
+  connectedAppsCard: {
+    borderRadius: 10,
+    borderWidth: 1,
+    padding: 12,
+    marginBottom: 14,
+  },
+  connectedAppsHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  connectedAppsTitle: {
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.8,
+  },
+  connectedAppsSub: {
+    fontSize: 11,
+    marginTop: 2,
+  },
+  manageAppsBtn: {
+    borderWidth: 1,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 6,
+  },
+  manageAppsBtnText: {
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  appsChipScroll: {
+    gap: 8,
+  },
+  appChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  appChipIcon: {
+    fontSize: 18,
+  },
+  appChipName: {
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  appChipType: {
+    fontSize: 10,
+    marginTop: 2,
+  },
   editorCard: { borderRadius: 10, borderWidth: 1, padding: 14, minHeight: 380 },
   editorHeading: { fontSize: 10, fontWeight: '800', letterSpacing: 1, marginBottom: 10 },
   screenplayInput: { fontSize: 13, lineHeight: 22, fontFamily: 'monospace', minHeight: 320, textAlignVertical: 'top' },

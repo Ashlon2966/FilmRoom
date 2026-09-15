@@ -201,12 +201,15 @@ export default function ConversationsListScreen({ navigation }) {
 
   // FAB Handlers (Requirements 33, 34, 35, 79)
   const handleFabActionSelect = (action) => {
-    if (action.id === 'ADD_CONNECTION') {
-      setFilmRoomCodeInput('');
-      setIsCodeModalVisible(true);
-    } else if (action.id === 'START_CHAT') {
-      handleOpenNewChat();
-    }
+    setIsFabDropUpVisible(false);
+    setTimeout(() => {
+      if (action.id === 'ADD_CONNECTION') {
+        setFilmRoomCodeInput('');
+        setIsCodeModalVisible(true);
+      } else if (action.id === 'START_CHAT') {
+        handleOpenNewChat();
+      }
+    }, 150);
   };
 
   const handleSearchFilmRoomCode = async () => {
@@ -622,9 +625,30 @@ export default function ConversationsListScreen({ navigation }) {
                 );
               }}
               ListEmptyComponent={
-                <Text style={{ color: theme.textSecondary, fontStyle: 'italic', textAlign: 'center', marginVertical: 20 }}>
-                  No accepted connections found.
-                </Text>
+                <View style={{ alignItems: 'center', paddingVertical: 24, paddingHorizontal: 16 }}>
+                  <Text style={{ fontSize: 28, marginBottom: 8 }}>🔒</Text>
+                  <Text style={{ color: theme.text, fontWeight: '800', fontSize: 14, textAlign: 'center' }}>
+                    No Connections Yet
+                  </Text>
+                  <Text style={{ color: theme.textSecondary, fontSize: 12, textAlign: 'center', marginTop: 6, lineHeight: 18 }}>
+                    FilmRoom requires an accepted connection before direct messaging is unlocked. Add filmmakers by FilmRoom Code or submit interest on The Board.
+                  </Text>
+                  <TouchableOpacity
+                    style={{
+                      marginTop: 14,
+                      backgroundColor: theme.primary || '#f5a623',
+                      paddingHorizontal: 16,
+                      paddingVertical: 10,
+                      borderRadius: 6,
+                    }}
+                    onPress={() => {
+                      setModalVisible(false);
+                      setIsCodeModalVisible(true);
+                    }}
+                  >
+                    <Text style={{ color: '#000000', fontWeight: '800', fontSize: 12 }}>+ Add Connection by Code</Text>
+                  </TouchableOpacity>
+                </View>
               }
             />
 

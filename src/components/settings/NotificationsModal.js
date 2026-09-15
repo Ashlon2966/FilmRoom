@@ -53,20 +53,33 @@ const parseTimeString = (timeStr) => {
   return d;
 };
 
+import { useAuth } from '../../context/AuthContext';
+import {
+  getNotificationPreferences,
+  saveNotificationPreferences,
+  requestNotificationPermissions,
+  DEFAULT_NOTIF_PREFS,
+} from '../../services/notificationService';
+
 export default function NotificationsModal({ visible, onClose }) {
   const { theme } = useTheme();
   const { showToast } = useToast();
+  const { currentUser } = useAuth();
 
   // Saved preferences & draft staging
-  const [savedSettings, setSavedSettings] = useState(DEFAULT_NOTIFS);
-  const [draftSettings, setDraftSettings] = useState(DEFAULT_NOTIFS);
+  const [savedSettings, setSavedSettings] = useState(DEFAULT_NOTIF_PREFS);
+  const [draftSettings, setDraftSettings] = useState(DEFAULT_NOTIF_PREFS);
   const [timePickerTarget, setTimePickerTarget] = useState(null); // 'FROM' | 'TO' | null
+  const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
     if (visible) {
-      setDraftSettings(savedSettings);
+      getNotificationPreferences(currentUser?.uid).then((prefs) => {
+        setSavedSettings(prefs);
+        setDraftSettings(prefs);
+      });
     }
-  }, [visible]);
+  }, [visible, currentUser?.uid]);
 
   const updateDraft = (key, value) => {
     setDraftSettings((prev) => ({ ...prev, [key]: value }));
@@ -90,10 +103,18 @@ export default function NotificationsModal({ visible, onClose }) {
     }
   };
 
-  const handleSave = () => {
-    setSavedSettings(draftSettings);
-    showToast({ type: 'success', title: 'Notifications Updated', message: 'Notification preferences saved.' });
-    onClose();
+  const handleSave = async () => {
+    setIsSaving(true);
+    try {
+      await saveNotificationPreferences(currentUser?.uid, draftSettings);
+      setSavedSettings(draftSettings);
+      showToast({ type: 'success', title: 'Notifications Updated', message: 'Notification preferences saved.' });
+      onClose();
+    } catch (err) {
+      Alert.alert('Error', 'Could not save notification preferences.');
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const handleCancel = () => {
@@ -102,8 +123,20 @@ export default function NotificationsModal({ visible, onClose }) {
   };
 
   const handleRestoreDefaults = () => {
-    setDraftSettings(DEFAULT_NOTIFS);
-    showToast({ type: 'info', message: 'Notification preferences reset to factory defaults.' });
+    setDraftSettings(DEFAULT_NOTIF_PREFS);
+    showToast({ type: 'info', message: 'Notification preferences reset to defaults. Tap Save to apply.' });
+  };
+
+  const handleRequestDevicePermissions = async () => {
+    const granted = await requestNotificationPermissions();
+    if (granted) {
+      showToast({ type: 'success', title: 'Permission Granted', message: 'Device notifications are active.' });
+    } else {
+      Alert.alert(
+        'Notification Permissions',
+        'Device notifications were not granted. You can enable them in your device Settings under FilmRoom.'
+      );
+    }
   };
 
   return (
@@ -367,6 +400,32 @@ export default function NotificationsModal({ visible, onClose }) {
               <Text style={[styles.comingSoonDesc, { color: theme.textMuted }]}>
                 High-priority production alarms that bypass phone Do Not Disturb / Focus modes for urgent 1st AD schedule shifts, emergency weather location moves, and next-day call time changes.
               </Text>
+            </View>
+
+            {/* DEVICE NOTIFICATIONS PERMISSION */}
+            <Text style={[styles.sectionHeading, { color: theme.textSecondary, marginTop: 18 }]}>DEVICE NOTIFICATIONS</Text>
+            <View style={[styles.settingGroup, { backgroundColor: theme.background, borderColor: theme.cardBorder, paddingVertical: 12 }]}>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                <View style={{ flex: 1, paddingRight: 10 }}>
+                  <Text style={[styles.switchLabel, { color: theme.text }]}>Device Push Notifications</Text>
+                  <Text style={[styles.switchDesc, { color: theme.textMuted }]}>
+                    Receive alerts on your device for crew calls, invites, and room updates.
+                  </Text>
+                </View>
+                <TouchableOpacity
+                  style={{
+                    backgroundColor: theme.surface,
+                    borderColor: theme.primary,
+                    borderWidth: 1,
+                    paddingHorizontal: 12,
+                    paddingVertical: 8,
+                    borderRadius: 8,
+                  }}
+                  onPress={handleRequestDevicePermissions}
+                >
+                  <Text style={{ color: theme.primary, fontSize: 12, fontWeight: '800' }}>Manage</Text>
+                </TouchableOpacity>
+              </View>
             </View>
 
             {/* Save / Cancel / Restore Defaults Bottom Controls */}

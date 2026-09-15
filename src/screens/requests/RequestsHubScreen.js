@@ -149,20 +149,23 @@ export default function RequestsHubScreen({ navigation }) {
 
   // FAB Handlers (Requirements 33, 34, 35, 79)
   const handleFabActionSelect = (action) => {
-    if (action.id === 'ADD_CONNECTION') {
-      setFilmRoomCodeInput('');
-      setIsCodeModalVisible(true);
-    } else if (action.id === 'START_CHAT') {
-      if (connections.length === 0) {
-        showToast({
-          type: 'info',
-          title: 'Connection Required',
-          message: 'Professional connection required before direct messaging. Connect with a filmmaker using their FilmRoom Code first.',
-        });
-      } else {
-        setIsConnectionPickerVisible(true);
+    setIsFabDropUpVisible(false);
+    setTimeout(() => {
+      if (action.id === 'ADD_CONNECTION') {
+        setFilmRoomCodeInput('');
+        setIsCodeModalVisible(true);
+      } else if (action.id === 'START_CHAT') {
+        if (connections.length === 0) {
+          showToast({
+            type: 'info',
+            title: 'Connection Required',
+            message: 'Professional connection required before direct messaging. Connect with a filmmaker using their FilmRoom Code first.',
+          });
+        } else {
+          setIsConnectionPickerVisible(true);
+        }
       }
-    }
+    }, 150);
   };
 
   const handleSearchFilmRoomCode = async () => {

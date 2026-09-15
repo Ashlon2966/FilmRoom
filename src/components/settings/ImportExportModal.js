@@ -17,8 +17,11 @@ import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import {
   exportFullFilmRoomBackup,
+  exportFilmRoomProjectPackage,
   exportProjectPackage,
   validateBackupFile,
+  validateFilmRoomPackage,
+  importFilmRoomProject,
   executeImport,
   restoreCloudDataToLocal,
 } from '../../services/backupService';
@@ -90,21 +93,29 @@ export default function ImportExportModal({ visible, onClose }) {
 
       const userRooms = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
       if (userRooms.length === 1) {
-        await exportProjectPackage(userRooms[0].id);
-        showToast({ type: 'success', title: 'Export Complete', message: `Project package exported for "${userRooms[0].title}".` });
+        setIsProcessing(true);
+        try {
+          const res = await exportFilmRoomProjectPackage(userRooms[0].id);
+          showToast({ type: 'success', title: 'Export Complete', message: `Exported .filmroom package for "${res.projectTitle}".` });
+        } finally {
+          setIsProcessing(false);
+        }
       } else {
         Alert.alert(
           'Select Room to Export',
-          'Choose a production room for the project package:',
+          'Choose a production room to export as .filmroom package:',
           [
-            ...userRooms.slice(0, 4).map((r) => ({
+            ...userRooms.slice(0, 5).map((r) => ({
               text: r.title,
               onPress: async () => {
+                setIsProcessing(true);
                 try {
-                  await exportProjectPackage(r.id);
-                  showToast({ type: 'success', title: 'Export Complete', message: `Exported "${r.title}".` });
+                  const res = await exportFilmRoomProjectPackage(r.id);
+                  showToast({ type: 'success', title: 'Export Complete', message: `Exported .filmroom package for "${res.projectTitle}".` });
                 } catch (err) {
                   showToast({ type: 'error', message: err.message });
+                } finally {
+                  setIsProcessing(false);
                 }
               },
             })),
@@ -114,6 +125,112 @@ export default function ImportExportModal({ visible, onClose }) {
       }
     } catch (e) {
       showToast({ type: 'error', message: e.message });
+    }
+  };
+
+  const handlePickFilmRoomPackage = async () => {
+    try {
+      const res = await DocumentPicker.getDocumentAsync({
+        type: '*/*',
+        copyToCacheDirectory: true,
+      });
+
+      if (res.canceled || !res.assets || res.assets.length === 0) return;
+
+      const file = res.assets[0];
+      const preview = await validateFilmRoomPackage(file.uri);
+
+      if (!preview.isValid) {
+        showToast({
+          type: 'error',
+          title: 'Invalid .filmroom File',
+          message: preview.error || 'The selected file is not a valid .filmroom project package.',
+        });
+        return;
+      }
+
+      let existingRooms = [];
+      try {
+        const snap = await getDocs(
+          query(collection(db, 'rooms'), where('memberUids', 'array-contains', currentUser.uid))
+        );
+        existingRooms = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      } catch (_) {}
+
+      const promptChoices = [
+        {
+          text: 'Restore as New Room',
+          onPress: async () => {
+            setIsProcessing(true);
+            try {
+              const result = await importFilmRoomProject({
+                projectData: preview.projectData,
+                importMode: 'NEW_ROOM',
+                userId: currentUser.uid,
+              });
+              showToast({
+                type: 'success',
+                title: 'Project Restored',
+                message: `"${result.title}" restored as a new production room.`,
+              });
+              onClose();
+            } catch (err) {
+              showToast({ type: 'error', message: err.message || 'Failed to restore project.' });
+            } finally {
+              setIsProcessing(false);
+            }
+          },
+        },
+      ];
+
+      if (existingRooms.length > 0) {
+        promptChoices.push({
+          text: 'Update Existing Room',
+          onPress: () => {
+            Alert.alert(
+              'Select Target Room',
+              `Choose which existing room to update with "${preview.projectTitle}":`,
+              [
+                ...existingRooms.slice(0, 5).map((r) => ({
+                  text: r.title,
+                  onPress: async () => {
+                    setIsProcessing(true);
+                    try {
+                      const result = await importFilmRoomProject({
+                        projectData: preview.projectData,
+                        importMode: 'UPDATE_EXISTING',
+                        userId: currentUser.uid,
+                        targetRoomId: r.id,
+                      });
+                      showToast({
+                        type: 'success',
+                        title: 'Project Updated',
+                        message: `"${result.title}" was updated with imported .filmroom data.`,
+                      });
+                      onClose();
+                    } catch (err) {
+                      showToast({ type: 'error', message: err.message || 'Failed to update project.' });
+                    } finally {
+                      setIsProcessing(false);
+                    }
+                  },
+                })),
+                { text: 'Cancel', style: 'cancel' },
+              ]
+            );
+          },
+        });
+      }
+
+      promptChoices.push({ text: 'Cancel', style: 'cancel' });
+
+      Alert.alert(
+        `Import "${preview.projectTitle}"`,
+        `Schema: v${preview.version}\nStages Included: ${preview.counts.stages}\nSlate Takes: ${preview.counts.takes}\nTeam Members: ${preview.counts.members}\n\nChoose how you would like to restore this project:`,
+        promptChoices
+      );
+    } catch (err) {
+      showToast({ type: 'error', message: err.message || 'Error processing .filmroom package.' });
     }
   };
 
@@ -236,12 +353,25 @@ export default function ImportExportModal({ visible, onClose }) {
 
                 <Text style={[styles.sectionTitle, { color: theme.textSecondary, marginTop: 18 }]}>IMPORT & RESTORE DATA</Text>
                 <View style={[styles.menuGroup, { backgroundColor: theme.background, borderColor: theme.cardBorder }]}>
+                  <TouchableOpacity style={styles.menuRow} onPress={handlePickFilmRoomPackage} activeOpacity={0.7} disabled={isProcessing}>
+                    <Text style={styles.menuIcon}>🎬</Text>
+                    <View style={styles.menuInfo}>
+                      <Text style={[styles.menuLabel, { color: theme.text }]}>Import .filmroom Package</Text>
+                      <Text style={[styles.menuDesc, { color: theme.textMuted }]}>
+                        Restore or update project from portable .filmroom bundle
+                      </Text>
+                    </View>
+                    <Text style={[styles.menuArrow, { color: theme.primary }]}>→</Text>
+                  </TouchableOpacity>
+
+                  <View style={styles.divider} />
+
                   <TouchableOpacity style={styles.menuRow} onPress={handlePickImportFile} activeOpacity={0.7} disabled={isProcessing}>
                     <Text style={styles.menuIcon}>📁</Text>
                     <View style={styles.menuInfo}>
-                      <Text style={[styles.menuLabel, { color: theme.text }]}>Import from Device</Text>
+                      <Text style={[styles.menuLabel, { color: theme.text }]}>Import Full Backup (.json)</Text>
                       <Text style={[styles.menuDesc, { color: theme.textMuted }]}>
-                        Inspect and restore from .filmroom or JSON package
+                        Inspect and restore from full FilmRoom backup
                       </Text>
                     </View>
                     <Text style={[styles.menuArrow, { color: theme.primary }]}>→</Text>

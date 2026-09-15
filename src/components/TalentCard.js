@@ -35,6 +35,17 @@ export default function TalentCard({ talent, onInquire, onViewReel, onPressProfi
   const unionStatus = talent.unionStatus && talent.unionStatus !== 'Non-Union' ? talent.unionStatus : null;
   const ageRange = talent.ageRange;
 
+  // Gender / Pronoun presentation
+  const getPronounDisplay = (gender) => {
+    if (!gender) return null;
+    const g = String(gender).trim().toLowerCase();
+    if (g === 'male' || g === 'man') return '(he/him)';
+    if (g === 'female' || g === 'woman') return '(she/her)';
+    if (g === 'non-binary' || g === 'nonbinary') return '(they/them)';
+    return null;
+  };
+  const pronounText = getPronounDisplay(talent.gender);
+
   return (
     <TouchableOpacity
       style={[styles.card, { backgroundColor: theme.card, borderColor: theme.cardBorder }]}
@@ -79,6 +90,11 @@ export default function TalentCard({ talent, onInquire, onViewReel, onPressProfi
         <View style={styles.nameBlock}>
           <Text style={[styles.name, { color: theme.text }]} numberOfLines={1}>
             {talent.name}
+            {pronounText ? (
+              <Text style={[styles.pronouns, { color: theme.textSecondary }]}>
+                {' '}{pronounText}
+              </Text>
+            ) : null}
           </Text>
           <Text style={[styles.subText, { color: theme.textSecondary }]} numberOfLines={1}>
             @{talent.username || 'crew'} • 📍 {talent.location || 'Worldwide'}
@@ -243,6 +259,11 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '800',
     letterSpacing: 0.3,
+  },
+  pronouns: {
+    fontSize: 12,
+    fontWeight: '600',
+    letterSpacing: 0.2,
   },
   subText: {
     fontSize: 12,

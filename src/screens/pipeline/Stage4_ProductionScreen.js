@@ -113,9 +113,35 @@ export default function Stage4_ProductionScreen({ navigation, route }) {
       {/* 1. STATIONARY TOP SECTION */}
       <View style={[styles.stationaryHeader, { backgroundColor: theme?.card || '#181b1f', borderColor: theme?.cardBorder || '#242830' }]}>
         <View style={styles.topNavRow}>
-          <BackButton onPress={() => navigation.navigate('TheBoardTab', { screen: 'RoomsList' })} />
+          <BackButton
+            onPress={() => {
+              if (navigation.canGoBack()) {
+                navigation.goBack();
+              } else {
+                navigation.navigate('TheBoardTab', { screen: 'RoomsList' });
+              }
+            }}
+          />
           <View style={{ flex: 1 }}>
-            <StageProgressBar currentStageIndex={3} onSelectStage={(idx) => setProductionStage(idx)} />
+            <StageProgressBar
+              currentStageIndex={3}
+              onSelectStage={(idx) => {
+                if (setProductionStage) setProductionStage(idx);
+                const stageScreens = [
+                  'Stage1_Ideation',
+                  'Stage2_Screenplay',
+                  'Stage3_PreProd',
+                  'Stage4_Production',
+                  'Stage5_PostProd',
+                ];
+                if (stageScreens[idx]) {
+                  navigation.navigate(stageScreens[idx], {
+                    roomId: activeRoomId,
+                    roomData,
+                  });
+                }
+              }}
+            />
           </View>
         </View>
 
@@ -274,7 +300,13 @@ export default function Stage4_ProductionScreen({ navigation, route }) {
 
           <TouchableOpacity
             style={[styles.advanceBtn, { backgroundColor: theme?.primary || '#f5a623', marginTop: 16 }]}
-            onPress={() => setProductionStage(4)}
+            onPress={() => {
+              if (setProductionStage) setProductionStage(4);
+              navigation.navigate('Stage5_PostProd', {
+                roomId: activeRoomId,
+                roomData,
+              });
+            }}
           >
             <Text style={styles.advanceBtnText}>Advance to Stage 5: Post-Production ➔</Text>
           </TouchableOpacity>

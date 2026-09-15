@@ -24,6 +24,8 @@ import ConnectedAppsModal from '../../components/settings/ConnectedAppsModal';
 import ProfilesPreviewModal from '../../components/settings/ProfilesPreviewModal';
 import AboutModal from '../../components/settings/AboutModal';
 import ProfileInfoModal from '../../components/settings/ProfileInfoModal';
+import PublicProfilePreviewModal from '../../components/settings/PublicProfilePreviewModal';
+import ArchivedProjectsModal from '../../components/settings/ArchivedProjectsModal';
 
 export default function SettingsScreen({ navigation }) {
   const { currentUser, userProfile, logout } = useAuth();
@@ -105,7 +107,7 @@ export default function SettingsScreen({ navigation }) {
 
           <TouchableOpacity
             style={styles.settingItem}
-            onPress={() => navigation.navigate('ProfileMain')}
+            onPress={() => setActiveModal('PUBLIC_PROFILE')}
             activeOpacity={0.7}
           >
             <Text style={styles.itemIcon}>👤</Text>
@@ -183,6 +185,23 @@ export default function SettingsScreen({ navigation }) {
               <Text style={[styles.itemTitle, { color: theme.text }]}>Storage & Data</Text>
               <Text style={[styles.itemSubtitle, { color: theme.textMuted }]}>
                 Local offline working layer & Cloudinary media
+              </Text>
+            </View>
+            <Text style={[styles.itemArrow, { color: theme.primary }]}>→</Text>
+          </TouchableOpacity>
+
+          <View style={styles.divider} />
+
+          <TouchableOpacity
+            style={styles.settingItem}
+            onPress={() => setActiveModal('ARCHIVED_PROJECTS')}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.itemIcon}>🗄️</Text>
+            <View style={styles.itemTextCol}>
+              <Text style={[styles.itemTitle, { color: theme.text }]}>Archived Projects</Text>
+              <Text style={[styles.itemSubtitle, { color: theme.textMuted }]}>
+                View and restore archived production rooms
               </Text>
             </View>
             <Text style={[styles.itemArrow, { color: theme.primary }]}>→</Text>
@@ -319,6 +338,14 @@ export default function SettingsScreen({ navigation }) {
         visible={activeModal === 'PROFILE_INFO'}
         onClose={() => setActiveModal(null)}
         onSaved={() => setActiveModal(null)}
+      />
+      <PublicProfilePreviewModal
+        visible={activeModal === 'PUBLIC_PROFILE'}
+        onClose={() => setActiveModal(null)}
+      />
+      <ArchivedProjectsModal
+        visible={activeModal === 'ARCHIVED_PROJECTS'}
+        onClose={() => setActiveModal(null)}
       />
     </View>
   );

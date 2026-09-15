@@ -168,9 +168,35 @@ export default function Stage3_PreProdScreen({ navigation, route }) {
       {/* 1. STATIONARY TOP SECTION */}
       <View style={[styles.stationaryHeader, { backgroundColor: theme?.card || '#181b1f', borderColor: theme?.cardBorder || '#242830' }]}>
         <View style={styles.topNavRow}>
-          <BackButton onPress={() => navigation.navigate('TheBoardTab', { screen: 'RoomsList' })} />
+          <BackButton
+            onPress={() => {
+              if (navigation.canGoBack()) {
+                navigation.goBack();
+              } else {
+                navigation.navigate('TheBoardTab', { screen: 'RoomsList' });
+              }
+            }}
+          />
           <View style={{ flex: 1 }}>
-            <StageProgressBar currentStageIndex={2} onSelectStage={(idx) => setProductionStage(idx)} />
+            <StageProgressBar
+              currentStageIndex={2}
+              onSelectStage={(idx) => {
+                if (setProductionStage) setProductionStage(idx);
+                const stageScreens = [
+                  'Stage1_Ideation',
+                  'Stage2_Screenplay',
+                  'Stage3_PreProd',
+                  'Stage4_Production',
+                  'Stage5_PostProd',
+                ];
+                if (stageScreens[idx]) {
+                  navigation.navigate(stageScreens[idx], {
+                    roomId: activeRoomId,
+                    roomData,
+                  });
+                }
+              }}
+            />
           </View>
         </View>
 
@@ -318,7 +344,13 @@ export default function Stage3_PreProdScreen({ navigation, route }) {
 
             <TouchableOpacity
               style={[styles.advanceBtn, { backgroundColor: theme?.primary || '#f5a623' }]}
-              onPress={() => setProductionStage(3)}
+              onPress={() => {
+                if (setProductionStage) setProductionStage(3);
+                navigation.navigate('Stage4_Production', {
+                  roomId: activeRoomId,
+                  roomData,
+                });
+              }}
             >
               <Text style={styles.advanceBtnText}>Enter Stage 4: Production & Smart Slate ➔</Text>
             </TouchableOpacity>

@@ -18,38 +18,70 @@ export const AuthProvider = ({ children }) => {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    let unsubscribeProfile = null;
+    let fallbackTimer = null;
+
     // Listen for authentication changes (login/logout/token refresh)
     const unsubscribeAuth = onAuthStateChanged(auth, async (user) => {
+      // Clean up previous profile listener immediately on any auth transition
+      if (unsubscribeProfile) {
+        unsubscribeProfile();
+        unsubscribeProfile = null;
+      }
+      if (fallbackTimer) {
+        clearTimeout(fallbackTimer);
+        fallbackTimer = null;
+      }
+
       setCurrentUser(user);
 
       if (user) {
+        let isHandled = false;
         // Stream user profile data from Firestore in real time
         const userRef = doc(db, 'users', user.uid);
-        const unsubscribeProfile = onSnapshot(userRef, (docSnap) => {
-          if (docSnap.exists()) {
-            const data = docSnap.data();
-            if (!data.filmRoomId) {
-              const stableCode = generateFilmRoomId(user.uid);
-              updateDoc(userRef, { filmRoomId: stableCode }).catch((err) =>
-                console.warn('Could not backfill filmRoomId:', err.message)
-              );
-              data.filmRoomId = stableCode;
+        unsubscribeProfile = onSnapshot(
+          userRef,
+          (docSnap) => {
+            isHandled = true;
+            if (docSnap.exists()) {
+              const data = docSnap.data();
+              if (!data.filmRoomId) {
+                const stableCode = generateFilmRoomId(user.uid);
+                updateDoc(userRef, { filmRoomId: stableCode }).catch((err) =>
+                  console.warn('Could not backfill filmRoomId:', err.message)
+                );
+                data.filmRoomId = stableCode;
+              }
+              setUserProfile(data);
+            } else {
+              setUserProfile(null);
             }
-            setUserProfile(data);
-          } else {
-            setUserProfile(null);
+            setLoading(false);
+          },
+          (err) => {
+            isHandled = true;
+            console.warn('User profile onSnapshot error (possibly offline):', err.message);
+            setLoading(false);
           }
-          setLoading(false);
-        });
+        );
 
-        return () => unsubscribeProfile();
+        // Fallback safety timeout if offline or network slow
+        fallbackTimer = setTimeout(() => {
+          if (!isHandled) {
+            setLoading(false);
+          }
+        }, 3500);
       } else {
         setUserProfile(null);
         setLoading(false);
       }
     });
 
-    return () => unsubscribeAuth();
+    return () => {
+      if (unsubscribeProfile) unsubscribeProfile();
+      if (fallbackTimer) clearTimeout(fallbackTimer);
+      unsubscribeAuth();
+    };
   }, []);
 
   // Register user and seed the base user document in Firestore

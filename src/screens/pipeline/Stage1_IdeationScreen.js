@@ -261,11 +261,34 @@ export default function Stage1_IdeationScreen({ navigation, route }) {
       {/* 1. STATIONARY TOP HEADER (Pinned permanently at top) */}
       <View style={[styles.stationaryHeader, { backgroundColor: theme?.card || '#181b1f', borderColor: theme?.cardBorder || '#242830' }]}>
         <View style={styles.topNavRow}>
-          <BackButton onPress={() => navigation.navigate('TheBoardTab', { screen: 'RoomsList' })} />
+          <BackButton
+            onPress={() => {
+              if (navigation.canGoBack()) {
+                navigation.goBack();
+              } else {
+                navigation.navigate('TheBoardTab', { screen: 'RoomsList' });
+              }
+            }}
+          />
           <View style={{ flex: 1 }}>
             <StageProgressBar
               currentStageIndex={0}
-              onSelectStage={(idx) => setProductionStage(idx)}
+              onSelectStage={(idx) => {
+                if (setProductionStage) setProductionStage(idx);
+                const stageScreens = [
+                  'Stage1_Ideation',
+                  'Stage2_Screenplay',
+                  'Stage3_PreProd',
+                  'Stage4_Production',
+                  'Stage5_PostProd',
+                ];
+                if (stageScreens[idx]) {
+                  navigation.navigate(stageScreens[idx], {
+                    roomId: activeRoomId,
+                    roomData,
+                  });
+                }
+              }}
             />
           </View>
         </View>
@@ -520,7 +543,13 @@ export default function Stage1_IdeationScreen({ navigation, route }) {
 
             <TouchableOpacity
               style={[styles.nextStageBtn, { backgroundColor: theme?.primary || '#f5a623' }]}
-              onPress={() => setProductionStage(1)}
+              onPress={() => {
+                if (setProductionStage) setProductionStage(1);
+                navigation.navigate('Stage2_Screenplay', {
+                  roomId: activeRoomId,
+                  roomData,
+                });
+              }}
             >
               <Text style={styles.nextStageText}>Proceed to Stage 2 (Screenplay Studio) ➔</Text>
             </TouchableOpacity>

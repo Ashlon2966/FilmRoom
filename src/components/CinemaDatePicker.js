@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -6,6 +6,7 @@ import {
   StyleSheet,
   Platform,
   Modal,
+  Alert,
 } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { format, parseISO, isValid, isBefore, startOfDay } from 'date-fns';
@@ -58,19 +59,26 @@ export function SingleDatePickerField({
   label,
   value,
   onChangeDate,
+  onChange,
   placeholder = 'Select date...',
   editable = true,
+  disabled = false,
   minDate,
   maxDate,
 }) {
+  const isEditable = editable !== false && !disabled;
   const { theme } = useTheme();
   const [showPicker, setShowPicker] = useState(false);
   const [tempDate, setTempDate] = useState(() => parseToDate(value));
 
+  useEffect(() => {
+    setTempDate(parseToDate(value));
+  }, [value]);
+
   const displayString = formatDisplayDate(value);
 
   const handleOpenPicker = () => {
-    if (!editable) return;
+    if (!isEditable) return;
     setTempDate(parseToDate(value));
     setShowPicker(true);
   };
@@ -84,6 +92,9 @@ export function SingleDatePickerField({
         const formatted = format(selectedDate, 'dd MMM yyyy');
         if (onChangeDate) {
           onChangeDate(formatted, selectedDate);
+        }
+        if (onChange) {
+          onChange(formatted, selectedDate);
         }
       }
     } else {
@@ -99,6 +110,9 @@ export function SingleDatePickerField({
     const formatted = format(tempDate, 'dd MMM yyyy');
     if (onChangeDate) {
       onChangeDate(formatted, tempDate);
+    }
+    if (onChange) {
+      onChange(formatted, tempDate);
     }
   };
 
@@ -116,12 +130,12 @@ export function SingleDatePickerField({
           {
             backgroundColor: theme.surface,
             borderColor: theme.cardBorder,
-            opacity: editable ? 1 : 0.6,
+            opacity: isEditable ? 1 : 0.6,
           },
         ]}
         onPress={handleOpenPicker}
-        activeOpacity={editable ? 0.7 : 1}
-        disabled={!editable}
+        activeOpacity={isEditable ? 0.7 : 1}
+        disabled={!isEditable}
       >
         <Text style={styles.calendarIcon}>📅</Text>
         <Text
@@ -207,25 +221,39 @@ export function SingleDatePickerField({
  */
 export function DateRangePickerField({
   label,
+  fromLabel,
+  toLabel,
   startDate,
   endDate,
+  fromDate,
+  toDate,
   onChangeRange,
+  onChangeDates,
+  onFromDateChange,
+  onToDateChange,
   editable = true,
+  disabled = false,
+  minDate,
+  maxDate,
 }) {
   const { theme } = useTheme();
+  const isEditable = editable !== false && !disabled;
+
+  const effectiveStart = startDate ?? fromDate ?? '';
+  const effectiveEnd = endDate ?? toDate ?? '';
 
   // Active picker state: null | 'START' | 'END'
   const [activePicker, setActivePicker] = useState(null);
   const [iosTempDate, setIosTempDate] = useState(new Date());
 
-  const formattedStart = formatDisplayDate(startDate);
-  const formattedEnd = formatDisplayDate(endDate);
+  const formattedStart = formatDisplayDate(effectiveStart);
+  const formattedEnd = formatDisplayDate(effectiveEnd);
 
   // Validation logic
   let validationError = null;
-  if (startDate && endDate) {
-    const startD = parseToDate(startDate);
-    const endD = parseToDate(endDate);
+  if (effectiveStart && effectiveEnd) {
+    const startD = parseToDate(effectiveStart);
+    const endD = parseToDate(effectiveEnd);
     if (isValid(startD) && isValid(endD)) {
       if (isBefore(startOfDay(endD), startOfDay(startD))) {
         validationError = 'To Date cannot be before From Date. Please select a valid range.';
@@ -234,10 +262,36 @@ export function DateRangePickerField({
   }
 
   const handleOpenPicker = (target) => {
-    if (!editable) return;
-    const curVal = target === 'START' ? startDate : endDate;
-    setIosTempDate(parseToDate(curVal));
+    if (!isEditable) return;
+    const curVal = target === 'START' ? effectiveStart : effectiveEnd;
+    setIosTempDate(parseToDate(curVal || (target === 'END' ? effectiveStart : '')));
     setActivePicker(target);
+  };
+
+  const dispatchDates = (newStart, newEnd) => {
+    const formattedRange = newStart && newEnd ? `${newStart} – ${newEnd}` : newStart || '';
+    if (onChangeRange) {
+      onChangeRange({
+        startDate: newStart,
+        endDate: newEnd,
+        formattedRange,
+      });
+    }
+    if (onChangeDates) {
+      onChangeDates({
+        fromFormatted: newStart,
+        toFormatted: newEnd,
+        startDate: newStart,
+        endDate: newEnd,
+        formattedRange,
+      });
+    }
+    if (newStart !== effectiveStart && onFromDateChange) {
+      onFromDateChange(newStart);
+    }
+    if (newEnd !== effectiveEnd && onToDateChange) {
+      onToDateChange(newEnd);
+    }
   };
 
   const handleNativeChange = (event, selectedDate) => {
@@ -245,38 +299,32 @@ export function DateRangePickerField({
       const target = activePicker;
       setActivePicker(null);
 
-      // Safe cancellation handling
+      // Safe cancellation handling (dismissed leaves values unchanged)
       if (event.type !== 'set' || !selectedDate) {
-        return; // Preserves existing values
+        return;
       }
 
       const formatted = format(selectedDate, 'dd MMM yyyy');
 
       if (target === 'START') {
-        let newEnd = endDate;
-        // If From Date moves past existing To Date, clear or adjust To Date
-        if (endDate) {
-          const endObj = parseToDate(endDate);
+        let newEnd = effectiveEnd;
+        // If From Date moves past existing To Date, reset To Date
+        if (effectiveEnd) {
+          const endObj = parseToDate(effectiveEnd);
           if (isValid(endObj) && isBefore(startOfDay(endObj), startOfDay(selectedDate))) {
-            newEnd = ''; // Require user to select valid To date
+            newEnd = '';
           }
         }
-
-        if (onChangeRange) {
-          onChangeRange({
-            startDate: formatted,
-            endDate: newEnd,
-            formattedRange: newEnd ? `${formatted} – ${newEnd}` : formatted,
-          });
-        }
+        dispatchDates(formatted, newEnd);
       } else if (target === 'END') {
-        if (onChangeRange) {
-          onChangeRange({
-            startDate: startDate || '',
-            endDate: formatted,
-            formattedRange: startDate ? `${startDate} – ${formatted}` : formatted,
-          });
+        if (effectiveStart) {
+          const startObj = parseToDate(effectiveStart);
+          if (isValid(startObj) && isBefore(startOfDay(selectedDate), startOfDay(startObj))) {
+            Alert.alert('Invalid Date', 'Wrap / To Date cannot be before Start / From Date.');
+            return;
+          }
         }
+        dispatchDates(effectiveStart || '', formatted);
       }
     } else {
       // iOS
@@ -292,28 +340,23 @@ export function DateRangePickerField({
     const formatted = format(iosTempDate, 'dd MMM yyyy');
 
     if (target === 'START') {
-      let newEnd = endDate;
-      if (endDate) {
-        const endObj = parseToDate(endDate);
+      let newEnd = effectiveEnd;
+      if (effectiveEnd) {
+        const endObj = parseToDate(effectiveEnd);
         if (isValid(endObj) && isBefore(startOfDay(endObj), startOfDay(iosTempDate))) {
           newEnd = '';
         }
       }
-      if (onChangeRange) {
-        onChangeRange({
-          startDate: formatted,
-          endDate: newEnd,
-          formattedRange: newEnd ? `${formatted} – ${newEnd}` : formatted,
-        });
-      }
+      dispatchDates(formatted, newEnd);
     } else if (target === 'END') {
-      if (onChangeRange) {
-        onChangeRange({
-          startDate: startDate || '',
-          endDate: formatted,
-          formattedRange: startDate ? `${startDate} – ${formatted}` : formatted,
-        });
+      if (effectiveStart) {
+        const startObj = parseToDate(effectiveStart);
+        if (isValid(startObj) && isBefore(startOfDay(iosTempDate), startOfDay(startObj))) {
+          Alert.alert('Invalid Date', 'Wrap / To Date cannot be before Start / From Date.');
+          return;
+        }
       }
+      dispatchDates(effectiveStart || '', formatted);
     }
   };
 
@@ -329,19 +372,21 @@ export function DateRangePickerField({
       <View style={styles.rangeRow}>
         {/* From Date Box */}
         <View style={styles.rangeCol}>
-          <Text style={[styles.subLabel, { color: theme.textMuted }]}>FROM DATE</Text>
+          <Text style={[styles.subLabel, { color: theme.textMuted }]}>
+            {(fromLabel || 'FROM DATE').toUpperCase()}
+          </Text>
           <TouchableOpacity
             style={[
               styles.fieldBox,
               {
                 backgroundColor: theme.surface,
                 borderColor: theme.cardBorder,
-                opacity: editable ? 1 : 0.6,
+                opacity: isEditable ? 1 : 0.6,
               },
             ]}
             onPress={() => handleOpenPicker('START')}
-            activeOpacity={editable ? 0.7 : 1}
-            disabled={!editable}
+            activeOpacity={isEditable ? 0.7 : 1}
+            disabled={!isEditable}
           >
             <Text style={styles.calendarIcon}>📅</Text>
             <Text
@@ -358,19 +403,21 @@ export function DateRangePickerField({
 
         {/* To Date Box */}
         <View style={styles.rangeCol}>
-          <Text style={[styles.subLabel, { color: theme.textMuted }]}>TO DATE</Text>
+          <Text style={[styles.subLabel, { color: theme.textMuted }]}>
+            {(toLabel || 'TO DATE').toUpperCase()}
+          </Text>
           <TouchableOpacity
             style={[
               styles.fieldBox,
               {
                 backgroundColor: theme.surface,
                 borderColor: validationError ? theme.danger : theme.cardBorder,
-                opacity: editable ? 1 : 0.6,
+                opacity: isEditable ? 1 : 0.6,
               },
             ]}
             onPress={() => handleOpenPicker('END')}
-            activeOpacity={editable ? 0.7 : 1}
-            disabled={!editable}
+            activeOpacity={isEditable ? 0.7 : 1}
+            disabled={!isEditable}
           >
             <Text style={styles.calendarIcon}>📅</Text>
             <Text
@@ -406,12 +453,13 @@ export function DateRangePickerField({
         <DateTimePicker
           value={
             activePicker === 'START'
-              ? parseToDate(startDate)
-              : parseToDate(endDate || startDate)
+              ? parseToDate(effectiveStart)
+              : parseToDate(effectiveEnd || effectiveStart)
           }
           mode="date"
           display="default"
-          minimumDate={activePicker === 'END' && startDate ? parseToDate(startDate) : undefined}
+          minimumDate={activePicker === 'END' && effectiveStart ? parseToDate(effectiveStart) : minDate}
+          maximumDate={maxDate}
           onChange={handleNativeChange}
         />
       )}
@@ -438,7 +486,7 @@ export function DateRangePickerField({
                   </Text>
                 </TouchableOpacity>
                 <Text style={[styles.iosTitle, { color: theme.text }]}>
-                  {activePicker === 'START' ? 'Select Start Date' : 'Select End Date'}
+                  {activePicker === 'START' ? (fromLabel || 'Select Start Date') : (toLabel || 'Select End Date')}
                 </Text>
                 <TouchableOpacity onPress={handleIosConfirm}>
                   <Text style={[styles.iosDoneText, { color: theme.primary }]}>
@@ -451,7 +499,8 @@ export function DateRangePickerField({
                 value={iosTempDate}
                 mode="date"
                 display="spinner"
-                minimumDate={activePicker === 'END' && startDate ? parseToDate(startDate) : undefined}
+                minimumDate={activePicker === 'END' && effectiveStart ? parseToDate(effectiveStart) : minDate}
+                maximumDate={maxDate}
                 onChange={handleNativeChange}
                 textColor={theme.text}
                 themeVariant="dark"

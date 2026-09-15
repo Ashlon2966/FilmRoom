@@ -9,6 +9,7 @@ import {
   Alert,
   TextInput,
   Modal,
+  RefreshControl,
 } from 'react-native';
 import {
   collection,
@@ -16,6 +17,7 @@ import {
   where,
   onSnapshot,
   orderBy,
+  getDocs,
 } from 'firebase/firestore';
 import { db } from '../../../firebaseConfig';
 import { useAuth } from '../../context/AuthContext';
@@ -31,6 +33,7 @@ import EditRoomModal from '../../components/EditRoomModal';
 import NotificationCenterModal from '../../components/NotificationCenterModal';
 import CustomActionDropUp from '../../components/CustomActionDropUp';
 import QuickProfileModal from '../../components/QuickProfileModal';
+import ArchivedProjectsModal from '../../components/settings/ArchivedProjectsModal';
 import { streamNotifications } from '../../services/notificationService';
 import { findUserByFilmRoomCode } from '../../services/userService';
 import { sendConnectionRequest, getConnectionStatus } from '../../services/connectionService';
@@ -41,10 +44,57 @@ export default function RoomsListScreen({ navigation }) {
   const { theme } = useTheme();
   const { showToast } = useToast();
 
-  const [activeSegment, setActiveSegment] = useState('ROOMS'); // 'ROOMS' | 'CALLS'
+  const [activeSegment, setActiveSegment] = useState('ROOMS'); // 'ROOMS' | 'PARTICIPATED' | 'CALLS'
   const [myRooms, setMyRooms] = useState([]);
+  const [participatedApps, setParticipatedApps] = useState([]);
   const [productionCalls, setProductionCalls] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [archivedModalVisible, setArchivedModalVisible] = useState(false);
+
+  // Separate owned vs participated rooms, filtering out ARCHIVED rooms from active board views
+  const ownedRooms = myRooms.filter(
+    (item) =>
+      (item.creatorId === currentUser?.uid || item.members?.[currentUser?.uid]?.roomAccess === 'Owner') &&
+      item.status !== 'ARCHIVED'
+  );
+  const archivedRooms = myRooms.filter(
+    (item) =>
+      (item.creatorId === currentUser?.uid || item.members?.[currentUser?.uid]?.roomAccess === 'Owner') &&
+      item.status === 'ARCHIVED'
+  );
+  const participatedRooms = myRooms.filter(
+    (item) =>
+      !(item.creatorId === currentUser?.uid || item.members?.[currentUser?.uid]?.roomAccess === 'Owner') &&
+      item.status !== 'ARCHIVED'
+  );
+
+  // Combine participated rooms and accepted applications (excluding rejected/withdrawn)
+  const participatedProjects = [
+    ...participatedRooms.map((r) => ({
+      id: `room_${r.id}`,
+      type: 'ROOM',
+      roomId: r.id,
+      title: r.title,
+      role: r.members?.[currentUser?.uid]?.roles?.join(', ') || r.members?.[currentUser?.uid]?.role || 'Crew Member',
+      stage: `Stage ${(r.currentStage || 0) + 1}`,
+      date: r.updatedAt?.toDate ? r.updatedAt.toDate().toLocaleDateString() : 'Active Production',
+      logline: r.logline,
+      genre: r.genre,
+      visibility: r.visibility,
+    })),
+    ...participatedApps.map((a) => ({
+      id: `app_${a.id}`,
+      type: 'APPLICATION',
+      requestId: a.id,
+      title: a.details?.project || a.details?.callData?.title || 'Production Call',
+      role: a.details?.role || a.details?.appliedRole || a.roleOrDepartment || 'Confirmed Talent / Crew',
+      stage: a.details?.callData?.category || 'Accepted Engagement',
+      date: a.resolvedAt ? new Date(a.resolvedAt).toLocaleDateString() : (a.createdAt ? new Date(a.createdAt).toLocaleDateString() : 'Accepted'),
+      logline: a.details?.message || a.details?.callData?.description || 'Accepted engagement on The Board.',
+      genre: a.details?.callData?.genre || 'Project',
+    })),
+  ];
 
   // Modals
   const [submitInterestVisible, setSubmitInterestVisible] = useState(false);
@@ -106,6 +156,31 @@ export default function RoomsListScreen({ navigation }) {
     return () => unsubscribe();
   }, [currentUser]);
 
+  // Stream accepted applications (Requirement 3.I: filter out rejected/withdrawn)
+  useEffect(() => {
+    if (!currentUser?.uid) return;
+
+    const reqRef = collection(db, 'contact_requests');
+    const q = query(
+      reqRef,
+      where('senderUid', '==', currentUser.uid),
+      where('status', '==', 'ACCEPTED')
+    );
+
+    const unsubscribe = onSnapshot(
+      q,
+      (snap) => {
+        const apps = snap.docs.map((d) => ({ id: d.id, ...d.data() })).filter(Boolean);
+        setParticipatedApps(apps);
+      },
+      (err) => {
+        console.warn('Participated apps notice:', err.message);
+      }
+    );
+
+    return () => unsubscribe();
+  }, [currentUser]);
+
   // Stream public production calls on The Board
   useEffect(() => {
     const callsRef = collection(db, 'production_calls');
@@ -124,6 +199,33 @@ export default function RoomsListScreen({ navigation }) {
 
     return () => unsubscribe();
   }, []);
+
+  // Pull to refresh handler (Requirement 3.C)
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    try {
+      if (currentUser?.uid) {
+        const roomsRef = collection(db, 'rooms');
+        const qRooms = query(roomsRef, where('memberUids', 'array-contains', currentUser.uid));
+        const snapRooms = await getDocs(qRooms);
+        setMyRooms(snapRooms.docs.map((d) => ({ id: d.id, ...d.data() })).filter(Boolean));
+
+        const reqRef = collection(db, 'contact_requests');
+        const qReq = query(reqRef, where('senderUid', '==', currentUser.uid), where('status', '==', 'ACCEPTED'));
+        const snapReq = await getDocs(qReq);
+        setParticipatedApps(snapReq.docs.map((d) => ({ id: d.id, ...d.data() })).filter(Boolean));
+      }
+
+      const callsRef = collection(db, 'production_calls');
+      const qCalls = query(callsRef, orderBy('createdAt', 'desc'));
+      const snapCalls = await getDocs(qCalls);
+      setProductionCalls(snapCalls.docs.map((d) => ({ id: d.id, ...d.data() })).filter(Boolean));
+    } catch (err) {
+      console.warn('Refresh notice:', err.message);
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   const handleEnterRoom = (roomId) => {
     switchRoom(roomId);
@@ -234,7 +336,7 @@ export default function RoomsListScreen({ navigation }) {
           </View>
         </View>
 
-        {/* Segmented Toggle: Production Rooms vs Public Crew Calls */}
+        {/* Segmented Toggle: Production Rooms vs Participated vs Public Crew Calls */}
         <View style={styles.segmentBar}>
           <TouchableOpacity
             style={[
@@ -256,8 +358,35 @@ export default function RoomsListScreen({ navigation }) {
                       : theme?.textMuted || '#64748b',
                 },
               ]}
+              numberOfLines={1}
             >
-              My Production Rooms ({myRooms.length})
+              My Rooms ({ownedRooms.length})
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[
+              styles.segmentItem,
+              activeSegment === 'PARTICIPATED' && {
+                borderBottomColor: theme?.primary || '#f5a623',
+                borderBottomWidth: 2,
+              },
+            ]}
+            onPress={() => setActiveSegment('PARTICIPATED')}
+          >
+            <Text
+              style={[
+                styles.segmentText,
+                {
+                  color:
+                    activeSegment === 'PARTICIPATED'
+                      ? theme?.primary || '#f5a623'
+                      : theme?.textMuted || '#64748b',
+                },
+              ]}
+              numberOfLines={1}
+            >
+              Participated ({participatedProjects.length})
             </Text>
           </TouchableOpacity>
 
@@ -281,8 +410,9 @@ export default function RoomsListScreen({ navigation }) {
                       : theme?.textMuted || '#64748b',
                 },
               ]}
+              numberOfLines={1}
             >
-              Public Crew Calls ({productionCalls.length})
+              Calls ({productionCalls.length})
             </Text>
           </TouchableOpacity>
         </View>
@@ -293,8 +423,16 @@ export default function RoomsListScreen({ navigation }) {
         <ActivityIndicator color={theme?.primary || '#f5a623'} style={{ marginTop: 40 }} />
       ) : activeSegment === 'ROOMS' ? (
         <FlatList
-          data={myRooms}
+          data={ownedRooms}
           keyExtractor={(item, idx) => item?.id || String(idx)}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={handleRefresh}
+              tintColor={theme?.primary || '#f5a623'}
+              colors={[theme?.primary || '#f5a623']}
+            />
+          }
           renderItem={({ item }) => {
             if (!item || !item.id) return null;
             const isOwner = item.creatorId === currentUser?.uid || item.members?.[currentUser?.uid]?.roomAccess === 'Owner';
@@ -312,84 +450,230 @@ export default function RoomsListScreen({ navigation }) {
                 onPress={() => handleEnterRoom(item.id)}
                 activeOpacity={0.8}
               >
-              <View style={styles.roomCardHeader}>
-                <Text style={[styles.roomTitle, { color: theme?.primary || '#f5a623' }]}>
-                  {item.title}
-                </Text>
-                <View style={{ flexDirection: 'row', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-                  <View
-                    style={[
-                      styles.roleTagPill,
-                      {
-                        backgroundColor: isOwner ? '#2a2215' : isManager ? '#141d2e' : '#181b1f',
-                        borderColor: isOwner ? (theme?.primary || '#f5a623') : isManager ? '#38bdf8' : (theme?.cardBorder || '#242830'),
-                      },
-                    ]}
-                  >
-                    <Text
+                <View style={styles.roomCardHeader}>
+                  <Text style={[styles.roomTitle, { color: theme?.primary || '#f5a623' }]}>
+                    {item.title}
+                  </Text>
+                  <View style={{ flexDirection: 'row', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <View
                       style={[
-                        styles.roleTagText,
+                        styles.roleTagPill,
                         {
-                          color: isOwner ? (theme?.primary || '#f5a623') : isManager ? '#38bdf8' : (theme?.textSecondary || '#9ca3af'),
+                          backgroundColor: isOwner ? '#2a2215' : isManager ? '#141d2e' : '#181b1f',
+                          borderColor: isOwner ? (theme?.primary || '#f5a623') : isManager ? '#38bdf8' : (theme?.cardBorder || '#242830'),
                         },
                       ]}
                     >
-                      {isOwner ? '👑 OWNER' : isManager ? '🛡️ MANAGER' : '🎬 CREW'}
+                      <Text
+                        style={[
+                          styles.roleTagText,
+                          {
+                            color: isOwner ? (theme?.primary || '#f5a623') : isManager ? '#38bdf8' : (theme?.textSecondary || '#9ca3af'),
+                          },
+                        ]}
+                      >
+                        {isOwner ? '👑 OWNER' : isManager ? '🛡️ MANAGER' : '🎬 CREW'}
+                      </Text>
+                    </View>
+                    <View style={[styles.stagePill, { backgroundColor: item.visibility === 'PUBLIC' ? '#1e3d29' : '#242830' }]}>
+                      <Text style={[styles.stagePillText, { color: item.visibility === 'PUBLIC' ? '#4ade80' : theme?.textSecondary || '#9ca3af' }]}>
+                        {item.visibility || 'PUBLIC'}
+                      </Text>
+                    </View>
+                    <View style={[styles.stagePill, { backgroundColor: '#2a2215' }]}>
+                      <Text style={[styles.stagePillText, { color: theme?.primary || '#f5a623' }]}>
+                        Stage {(item.currentStage || 0) + 1}
+                      </Text>
+                    </View>
+                  </View>
+                </View>
+
+                <Text style={[styles.roomGenre, { color: theme?.textSecondary || '#9ca3af' }]}>
+                  {item.projectType || 'Film'} • {Object.keys(item.members || {}).length} Crew • {item.crewRequirements?.length ? `${item.crewRequirements.length} Open Roles` : 'Crew Set'}
+                </Text>
+
+                <Text style={[styles.roomLogline, { color: theme?.text || '#ffffff' }]} numberOfLines={2}>
+                  {item.logline || 'Production in progress.'}
+                </Text>
+
+                <View style={styles.enterRow}>
+                  <Text style={[styles.enterText, { color: theme?.primary || '#f5a623' }]}>
+                    Enter Digital Slate & Pipeline ➔
+                  </Text>
+                  {(item.creatorId === currentUser?.uid ||
+                    item.members?.[currentUser?.uid]?.roomAccess === 'Owner' ||
+                    item.members?.[currentUser?.uid]?.roomAccess === 'Manager') && (
+                    <TouchableOpacity
+                      style={[styles.editBadgeBtn, { backgroundColor: theme?.surface || '#121417', borderColor: theme?.cardBorder || '#242830' }]}
+                      onPress={(e) => {
+                        e.stopPropagation();
+                        setRoomToEdit(item);
+                      }}
+                      activeOpacity={0.8}
+                    >
+                      <Text style={[styles.editBadgeText, { color: theme?.textSecondary || '#9ca3af' }]}>
+                        ⚙️ Edit
+                      </Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+              </TouchableOpacity>
+            );
+          }}
+          contentContainerStyle={{ padding: 16, paddingBottom: 90 }}
+          ListFooterComponent={
+            <View>
+              {participatedProjects.length > 0 ? (
+                <View style={[styles.participatedPromptCard, { backgroundColor: theme?.card || '#181b1f', borderColor: theme?.cardBorder || '#242830' }]}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.participatedPromptTitle, { color: theme?.text || '#ffffff' }]}>
+                      🎬 Projects I've Participated In ({participatedProjects.length})
+                    </Text>
+                    <Text style={[styles.participatedPromptSub, { color: theme?.textSecondary || '#9ca3af' }]}>
+                      View productions where you are a confirmed crew collaborator or accepted talent.
                     </Text>
                   </View>
-                  <View style={[styles.stagePill, { backgroundColor: item.visibility === 'PUBLIC' ? '#1e3d29' : '#242830' }]}>
-                    <Text style={[styles.stagePillText, { color: item.visibility === 'PUBLIC' ? '#4ade80' : theme?.textSecondary || '#9ca3af' }]}>
-                      {item.visibility || 'PUBLIC'}
+                  <TouchableOpacity
+                    style={[styles.participatedPromptBtn, { backgroundColor: theme?.primary || '#f5a623' }]}
+                    onPress={() => setActiveSegment('PARTICIPATED')}
+                  >
+                    <Text style={styles.participatedPromptBtnText}>View ➔</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : null}
+
+              {archivedRooms.length > 0 ? (
+                <View style={[styles.participatedPromptCard, { backgroundColor: theme?.surface || '#121418', borderColor: theme?.cardBorder || '#242830', marginTop: 10 }]}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.participatedPromptTitle, { color: theme?.text || '#ffffff' }]}>
+                      🗄️ Archived Projects ({archivedRooms.length})
+                    </Text>
+                    <Text style={[styles.participatedPromptSub, { color: theme?.textSecondary || '#9ca3af' }]}>
+                      Stored outside active board views. Tap to view or restore to The Board.
                     </Text>
                   </View>
-                  <View style={[styles.stagePill, { backgroundColor: '#2a2215' }]}>
-                    <Text style={[styles.stagePillText, { color: theme?.primary || '#f5a623' }]}>
-                      Stage {(item.currentStage || 0) + 1}
+                  <TouchableOpacity
+                    style={[styles.participatedPromptBtn, { backgroundColor: theme?.surface || '#121418', borderWidth: 1, borderColor: theme?.cardBorder || '#242830' }]}
+                    onPress={() => setArchivedModalVisible(true)}
+                  >
+                    <Text style={[styles.participatedPromptBtnText, { color: theme?.primary || '#f5a623' }]}>Manage ➔</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : null}
+            </View>
+          }
+          ListEmptyComponent={
+            <View style={styles.emptyCard}>
+              <Text style={[styles.emptyTitle, { color: theme?.text || '#ffffff' }]}>
+                No Owned Rooms
+              </Text>
+              <Text style={[styles.emptySub, { color: theme?.textSecondary || '#9ca3af' }]}>
+                Tap "+ New Room" above to set up your digital slate and screenplay space.
+              </Text>
+            </View>
+          }
+        />
+      ) : activeSegment === 'PARTICIPATED' ? (
+        <FlatList
+          data={participatedProjects}
+          keyExtractor={(item, idx) => item?.id || String(idx)}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={handleRefresh}
+              tintColor={theme?.primary || '#f5a623'}
+              colors={[theme?.primary || '#f5a623']}
+            />
+          }
+          ListHeaderComponent={
+            <View style={styles.participatedHeader}>
+              <Text style={[styles.participatedHeaderTitle, { color: theme?.text || '#ffffff' }]}>
+                PROJECTS I'VE PARTICIPATED IN
+              </Text>
+              <Text style={[styles.participatedHeaderSub, { color: theme?.textSecondary || '#9ca3af' }]}>
+                Productions and verified engagements where you are active crew or accepted talent. Unsuccessful or withdrawn applications are strictly excluded.
+              </Text>
+            </View>
+          }
+          renderItem={({ item }) => {
+            if (!item) return null;
+            const isRoom = item.type === 'ROOM';
+            return (
+              <TouchableOpacity
+                style={[
+                  styles.participatedCard,
+                  {
+                    backgroundColor: theme?.card || '#181b1f',
+                    borderColor: theme?.cardBorder || '#242830',
+                  },
+                ]}
+                onPress={() => {
+                  if (isRoom) {
+                    handleEnterRoom(item.roomId);
+                  }
+                }}
+                activeOpacity={isRoom ? 0.8 : 1}
+              >
+                <View style={styles.participatedCardHeader}>
+                  <Text style={[styles.participatedTitle, { color: theme?.text || '#ffffff' }]}>
+                    {item.title}
+                  </Text>
+                  <View
+                    style={[
+                      styles.participatedRoleBadge,
+                      {
+                        backgroundColor: '#2a2215',
+                        borderColor: theme?.primary || '#f5a623',
+                      },
+                    ]}
+                  >
+                    <Text style={[styles.participatedRoleText, { color: theme?.primary || '#f5a623' }]}>
+                      🎬 {item.role}
                     </Text>
                   </View>
                 </View>
-              </View>
 
-              <Text style={[styles.roomGenre, { color: theme?.textSecondary || '#9ca3af' }]}>
-                {item.projectType || 'Film'} • {Object.keys(item.members || {}).length} Crew • {item.crewRequirements?.length ? `${item.crewRequirements.length} Open Roles` : 'Crew Set'}
-              </Text>
-
-              <Text style={[styles.roomLogline, { color: theme?.text || '#ffffff' }]} numberOfLines={2}>
-                {item.logline || 'Production in progress.'}
-              </Text>
-
-              <View style={styles.enterRow}>
-                <Text style={[styles.enterText, { color: theme?.primary || '#f5a623' }]}>
-                  Enter Digital Slate & Pipeline ➔
-                </Text>
-                {(item.creatorId === currentUser?.uid ||
-                  item.members?.[currentUser?.uid]?.roomAccess === 'Owner' ||
-                  item.members?.[currentUser?.uid]?.roomAccess === 'Manager') && (
-                  <TouchableOpacity
-                    style={[styles.editBadgeBtn, { backgroundColor: theme?.surface || '#121417', borderColor: theme?.cardBorder || '#242830' }]}
-                    onPress={(e) => {
-                      e.stopPropagation();
-                      setRoomToEdit(item);
-                    }}
-                    activeOpacity={0.8}
-                  >
-                    <Text style={[styles.editBadgeText, { color: theme?.textSecondary || '#9ca3af' }]}>
-                      ⚙️ Edit
+                <View style={styles.participatedMetaRow}>
+                  <View style={[styles.stagePill, { backgroundColor: isRoom ? '#1e3d29' : '#141d2e' }]}>
+                    <Text style={[styles.stagePillText, { color: isRoom ? '#4ade80' : '#38bdf8' }]}>
+                      {isRoom ? item.stage : '✓ ACCEPTED APPLICATION'}
                     </Text>
-                  </TouchableOpacity>
+                  </View>
+                  <Text style={[styles.participatedMetaText, { color: theme?.textSecondary || '#9ca3af' }]}>
+                    📅 {item.date}
+                  </Text>
+                </View>
+
+                {item.logline ? (
+                  <Text style={[styles.participatedLogline, { color: theme?.textSecondary || '#9ca3af' }]} numberOfLines={2}>
+                    {item.logline}
+                  </Text>
+                ) : null}
+
+                {isRoom ? (
+                  <View style={styles.enterRow}>
+                    <Text style={[styles.enterText, { color: theme?.primary || '#f5a623' }]}>
+                      Enter Digital Slate & Pipeline ➔
+                    </Text>
+                  </View>
+                ) : (
+                  <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4 }}>
+                    <Text style={{ fontSize: 11, color: '#4ade80', fontWeight: '700' }}>
+                      ✓ Confirmed on The Board
+                    </Text>
+                  </View>
                 )}
-              </View>
-            </TouchableOpacity>
-          );
-        }}
+              </TouchableOpacity>
+            );
+          }}
           contentContainerStyle={{ padding: 16, paddingBottom: 90 }}
           ListEmptyComponent={
             <View style={styles.emptyCard}>
               <Text style={[styles.emptyTitle, { color: theme?.text || '#ffffff' }]}>
-                No Active Rooms
+                No Participated Productions Yet
               </Text>
               <Text style={[styles.emptySub, { color: theme?.textSecondary || '#9ca3af' }]}>
-                Tap "+ New Room" above to set up your digital slate and screenplay space.
+                When you join a production room as crew or have an application accepted on The Board, it will appear here.
               </Text>
             </View>
           }
@@ -398,6 +682,14 @@ export default function RoomsListScreen({ navigation }) {
         <FlatList
           data={productionCalls}
           keyExtractor={(item, idx) => item?.id || String(idx)}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={handleRefresh}
+              tintColor={theme?.primary || '#f5a623'}
+              colors={[theme?.primary || '#f5a623']}
+            />
+          }
           renderItem={({ item }) => {
             if (!item || !item.id) return null;
             return (
@@ -551,6 +843,14 @@ export default function RoomsListScreen({ navigation }) {
               setPostCallModalVisible(true);
             },
           },
+          {
+            label: 'Archived Projects',
+            icon: '🗄️',
+            subtitle: 'View and restore archived production rooms',
+            onPress: () => {
+              setArchivedModalVisible(true);
+            },
+          },
         ]}
         onClose={() => setIsFabDropUpVisible(false)}
       />
@@ -636,6 +936,12 @@ export default function RoomsListScreen({ navigation }) {
           actionLoading={actionLoading}
         />
       )}
+
+      {/* Archived Projects Modal */}
+      <ArchivedProjectsModal
+        visible={archivedModalVisible}
+        onClose={() => setArchivedModalVisible(false)}
+      />
     </View>
   );
 }
@@ -868,5 +1174,91 @@ const styles = StyleSheet.create({
     color: '#000000',
     fontWeight: '800',
     fontSize: 13,
+  },
+  participatedHeader: {
+    marginBottom: 14,
+    marginTop: 4,
+  },
+  participatedHeaderTitle: {
+    fontSize: 13,
+    fontWeight: '900',
+    letterSpacing: 0.8,
+  },
+  participatedHeaderSub: {
+    fontSize: 11,
+    marginTop: 4,
+    lineHeight: 16,
+  },
+  participatedCard: {
+    padding: 16,
+    borderRadius: 10,
+    borderWidth: 1,
+    marginBottom: 12,
+  },
+  participatedCardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  participatedTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    flex: 1,
+    marginRight: 8,
+  },
+  participatedRoleBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 4,
+    borderWidth: 1,
+  },
+  participatedRoleText: {
+    fontSize: 10,
+    fontWeight: 'bold',
+  },
+  participatedMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 4,
+    marginBottom: 8,
+  },
+  participatedMetaText: {
+    fontSize: 11,
+  },
+  participatedLogline: {
+    fontSize: 12,
+    lineHeight: 17,
+    marginBottom: 8,
+  },
+  participatedPromptCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 14,
+    borderRadius: 10,
+    borderWidth: 1,
+    marginTop: 10,
+    marginBottom: 20,
+    gap: 12,
+  },
+  participatedPromptTitle: {
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  participatedPromptSub: {
+    fontSize: 11,
+    marginTop: 3,
+    lineHeight: 16,
+  },
+  participatedPromptBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 6,
+  },
+  participatedPromptBtnText: {
+    color: '#000000',
+    fontSize: 11,
+    fontWeight: '900',
   },
 });

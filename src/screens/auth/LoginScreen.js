@@ -24,16 +24,36 @@ export default function LoginScreen({ navigation }) {
   const [imageError, setImageError] = useState(false);
 
   const handleLogin = async () => {
-    if (!email.trim() || !password) {
-      Alert.alert('Required', 'Please enter your email and password.');
+    const trimmedEmail = email.trim();
+    if (!trimmedEmail || !password) {
+      Alert.alert('Required Fields', 'Please enter your email and password.');
       return;
     }
 
     setLoading(true);
     try {
-      await signInWithEmailAndPassword(auth, email.trim(), password);
+      await signInWithEmailAndPassword(auth, trimmedEmail, password);
     } catch (error) {
-      Alert.alert('Login Failed', error.message);
+      const code = error?.code || '';
+      if (code === 'auth/network-request-failed') {
+        Alert.alert(
+          'Network Connection Required',
+          'An active internet connection is required to sign in. Please check your internet connection and try again.'
+        );
+      } else if (
+        code === 'auth/user-not-found' ||
+        code === 'auth/wrong-password' ||
+        code === 'auth/invalid-credential'
+      ) {
+        Alert.alert('Sign In Notice', 'Invalid email or password. Please check your credentials.');
+      } else if (code === 'auth/too-many-requests') {
+        Alert.alert(
+          'Too Many Attempts',
+          'Access temporarily disabled due to multiple failed attempts. Please try again later.'
+        );
+      } else {
+        Alert.alert('Login Failed', error.message || 'Unable to sign in. Please try again.');
+      }
     } finally {
       setLoading(false);
     }

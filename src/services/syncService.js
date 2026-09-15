@@ -1,6 +1,23 @@
-import { doc, getDoc, setDoc, updateDoc, deleteDoc, serverTimestamp } from 'firebase/firestore';
+import {
+  doc,
+  getDoc,
+  setDoc,
+  updateDoc,
+  deleteDoc,
+  serverTimestamp,
+  collection,
+  query,
+  where,
+  getDocs,
+} from 'firebase/firestore';
 import { db } from '../../firebaseConfig';
-import { getLocalDatabase } from './localDatabaseService';
+import {
+  getLocalDatabase,
+  cacheRoom,
+  cacheCrewCall,
+  getCachedRooms,
+  getCachedCrewCalls,
+} from './localDatabaseService';
 
 /**
  * Enqueues a local operation into the SQLite sync queue.
@@ -146,6 +163,98 @@ export async function syncNow({ userId } = {}) {
     syncedCount,
     failedCount,
     conflictCount,
+    lastSynced: now,
+  };
+}
+
+/**
+ * Pulls latest records from Firestore into local SQLite cache.
+ * Resolves discrepancies and reports exact count of updated items.
+ */
+export async function pullFromCloud({ userId } = {}) {
+  if (!userId) {
+    return {
+      updatedCount: 0,
+      message: 'Authentication required to pull from cloud.',
+      lastSynced: null,
+    };
+  }
+
+  let updatedCount = 0;
+  const localDb = await getLocalDatabase();
+
+  // 1. Fetch and cache user profile
+  try {
+    const userSnap = await getDoc(doc(db, 'users', userId));
+    if (userSnap.exists()) {
+      const userData = userSnap.data();
+      await localDb.runAsync(
+        `INSERT OR REPLACE INTO sync_metadata (key, value, updated_at) VALUES ('cached_user_profile', ?, ?);`,
+        [JSON.stringify({ id: userId, ...userData }), new Date().toISOString()]
+      );
+    }
+  } catch (err) {
+    console.warn('Pull profile notice:', err.message);
+  }
+
+  // 2. Fetch rooms where user is member
+  try {
+    const existingRooms = await getCachedRooms();
+    const existingRoomMap = new Map(existingRooms.map((r) => [r.id, r]));
+
+    const roomsSnap = await getDocs(
+      query(collection(db, 'rooms'), where('memberUids', 'array-contains', userId))
+    );
+
+    for (const d of roomsSnap.docs) {
+      const cloudRoom = { id: d.id, ...d.data() };
+      const localRoom = existingRoomMap.get(d.id);
+
+      const cloudUpdated = cloudRoom.updatedAt?.toDate
+        ? cloudRoom.updatedAt.toDate().toISOString()
+        : (cloudRoom.updatedAt || '');
+      const localUpdated = localRoom?.updated_at || '';
+
+      if (!localRoom || cloudUpdated > localUpdated || JSON.stringify(localRoom) !== JSON.stringify(cloudRoom)) {
+        await cacheRoom(cloudRoom);
+        updatedCount++;
+      }
+    }
+  } catch (err) {
+    console.warn('Pull rooms notice:', err.message);
+  }
+
+  // 3. Fetch user's production calls
+  try {
+    const existingCalls = await getCachedCrewCalls();
+    const existingCallMap = new Map(existingCalls.map((c) => [c.id, c]));
+
+    const callsSnap = await getDocs(
+      query(collection(db, 'production_calls'), where('createdBy', '==', userId))
+    );
+
+    for (const d of callsSnap.docs) {
+      const cloudCall = { id: d.id, ...d.data() };
+      const localCall = existingCallMap.get(d.id);
+
+      if (!localCall || JSON.stringify(localCall) !== JSON.stringify(cloudCall)) {
+        await cacheCrewCall(cloudCall);
+        updatedCount++;
+      }
+    }
+  } catch (err) {
+    console.warn('Pull calls notice:', err.message);
+  }
+
+  const now = new Date().toISOString();
+  await localDb.runAsync(
+    `INSERT OR REPLACE INTO sync_metadata (key, value, updated_at) VALUES ('last_sync_timestamp', ?, ?);`,
+    [now, now]
+  );
+
+  return {
+    updatedCount,
+    message: updatedCount === 0 ? 'Already up to date with cloud.' : `${updatedCount} item(s) updated from cloud.`,
     lastSynced: now,
   };
 }

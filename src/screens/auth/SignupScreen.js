@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   View,
   Text,
@@ -10,13 +10,22 @@ import {
   TextInput,
   TouchableOpacity,
   ActivityIndicator,
+  AppState,
 } from 'react-native';
-import { createUserWithEmailAndPassword } from 'firebase/auth';
+import { createUserWithEmailAndPassword, signInWithEmailAndPassword } from 'firebase/auth';
 import { auth } from '../../../firebaseConfig';
 import {
   checkUsernameAvailability,
   reserveUsernameAndCreateUser,
 } from '../../services/userService';
+import {
+  checkEmailAvailability,
+  sendSignupVerificationEmail,
+  checkSignupVerificationStatus,
+  finalizeStagingUser,
+  cleanupStagingUser,
+  registerEmailReservation,
+} from '../../services/authVerificationService';
 import {
   validateUsernameFormat,
   validateEmailFormat,
@@ -41,11 +50,6 @@ export default function SignupScreen({ navigation }) {
   const [checkedUsername, setCheckedUsername] = useState(''); // Stores normalized username that was verified
   const checkRequestIdRef = useRef(0);
 
-  // Email State: 'EMPTY' | 'INVALID' | 'VALID' | 'ALREADY_REGISTERED' | 'CHECK_ERROR'
-  const [emailState, setEmailState] = useState('EMPTY');
-  const [emailMessage, setEmailMessage] = useState('');
-  const [emailTouched, setEmailTouched] = useState(false);
-
   // Password Checklist State
   const [passwordFocused, setPasswordFocused] = useState(false);
 
@@ -68,7 +72,6 @@ export default function SignupScreen({ navigation }) {
 
   const handleUsernameChange = (text) => {
     setUsername(text);
-    // Invalidate previous check immediately upon text change
     setUsernameState('IDLE');
     setUsernameMessage('');
     setCheckedUsername('');
@@ -93,7 +96,6 @@ export default function SignupScreen({ navigation }) {
     try {
       const res = await checkUsernameAvailability(trimmed);
 
-      // Race-condition protection: Ignore if a newer check was initiated
       if (currentReqId !== checkRequestIdRef.current) return;
 
       if (res.available) {
@@ -121,7 +123,6 @@ export default function SignupScreen({ navigation }) {
     }
   };
 
-  // Determine if check button should be enabled
   const isUsernameEmpty = username.trim().length === 0;
   const usernameFormatCheck = validateUsernameFormat(username);
   const isCheckButtonDisabled =
@@ -130,12 +131,37 @@ export default function SignupScreen({ navigation }) {
     usernameState === 'CHECKING' ||
     (usernameState === 'AVAILABLE' && usernameFormatCheck.normalized === checkedUsername);
 
+  // Email State: 'EMPTY' | 'INVALID' | 'CHECKING' | 'ALREADY_REGISTERED' | 'AVAILABLE' | 'SENDING' | 'SENT' | 'VERIFIED'
+  const [emailState, setEmailState] = useState('EMPTY');
+  const [emailMessage, setEmailMessage] = useState('');
+  const [emailTouched, setEmailTouched] = useState(false);
+  const [isEmailVerified, setIsEmailVerified] = useState(false);
+  const [verifiedEmailAddress, setVerifiedEmailAddress] = useState('');
+  const [stagingUser, setStagingUser] = useState(null);
+  const [isCheckingStatus, setIsCheckingStatus] = useState(false);
+  const emailCheckRequestIdRef = useRef(0);
+  const emailCheckTimeoutRef = useRef(null);
+
+  // Auto-check verification status when returning from email link
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (nextAppState) => {
+      if (nextAppState === 'active' && emailState === 'SENT' && stagingUser && !isEmailVerified) {
+        handleCheckVerificationStatus();
+      }
+    });
+    return () => subscription.remove();
+  }, [emailState, stagingUser, isEmailVerified]);
+
   // --------------------------------------------------------------------------
-  // EMAIL LOGIC
+  // EMAIL STAGED LOGIC (Format -> Existence Check -> Verify -> Confirmation)
   // --------------------------------------------------------------------------
 
   const handleEmailChange = (text) => {
     setEmail(text);
+    setIsEmailVerified(false);
+    setVerifiedEmailAddress('');
+    setStagingUser(null);
+    if (emailCheckTimeoutRef.current) clearTimeout(emailCheckTimeoutRef.current);
     const trimmed = text.trim();
 
     if (trimmed.length === 0) {
@@ -144,21 +170,44 @@ export default function SignupScreen({ navigation }) {
       return;
     }
 
-    // Live format validation while typing
-    const validation = validateEmailFormat(trimmed);
-    if (validation.isValid) {
-      setEmailState('VALID');
-      setEmailMessage('✓ Valid email format');
-    } else {
-      // If user has already focused/blurred or typed an '@', show formatting guidance
-      if (emailTouched || trimmed.includes('@')) {
-        setEmailState('INVALID');
-        setEmailMessage('✕ Enter a valid email address');
-      } else {
-        setEmailState('EMPTY');
+    // STEP 1 — Validate email format first
+    const formatValidation = validateEmailFormat(trimmed);
+    if (!formatValidation.isValid) {
+      // Do not perform account-existence check until email format passes
+      setEmailState('INVALID');
+      setEmailMessage(emailTouched || trimmed.includes('@') ? '✕ Enter a valid email address' : '');
+      return;
+    }
+
+    // STEP 2 — Check whether the email already has an account (debounced)
+    const currentReqId = ++emailCheckRequestIdRef.current;
+    setEmailState('CHECKING');
+    setEmailMessage('Checking email availability...');
+
+    emailCheckTimeoutRef.current = setTimeout(async () => {
+      try {
+        const res = await checkEmailAvailability(trimmed);
+        if (currentReqId !== emailCheckRequestIdRef.current) return;
+
+        if (res.available) {
+          setEmailState('AVAILABLE');
+          setEmailMessage('✓ Email available for registration. Tap Verify.');
+        } else if (res.status === 'taken') {
+          setEmailState('ALREADY_REGISTERED');
+          setEmailMessage('✕ This email is already registered. Please log in.');
+        } else if (res.status === 'invalid') {
+          setEmailState('INVALID');
+          setEmailMessage(res.message);
+        } else {
+          setEmailState('AVAILABLE');
+          setEmailMessage('✓ Ready to verify email.');
+        }
+      } catch (err) {
+        if (currentReqId !== emailCheckRequestIdRef.current) return;
+        setEmailState('AVAILABLE');
         setEmailMessage('');
       }
-    }
+    }, 250);
   };
 
   const handleEmailBlur = () => {
@@ -170,19 +219,104 @@ export default function SignupScreen({ navigation }) {
       return;
     }
 
-    const validation = validateEmailFormat(trimmed);
-    if (validation.isValid) {
-      setEmailState('VALID');
-      setEmailMessage('✓ Valid email format');
-    } else {
+    const formatValidation = validateEmailFormat(trimmed);
+    if (!formatValidation.isValid) {
       setEmailState('INVALID');
       setEmailMessage('✕ Enter a valid email address');
     }
   };
 
-  // --------------------------------------------------------------------------
-  // PASSWORD LOGIC
-  // --------------------------------------------------------------------------
+  const handleSendVerificationEmail = async () => {
+    const trimmed = email.trim();
+    if (!trimmed) return;
+
+    const formatCheck = validateEmailFormat(trimmed);
+    if (!formatCheck.isValid) {
+      Alert.alert('Invalid Email', 'Please enter a valid email format before verifying.');
+      return;
+    }
+
+    if (emailState === 'ALREADY_REGISTERED') {
+      Alert.alert(
+        'Email Already Registered',
+        'This email is already associated with an account. Please log in instead.',
+        [
+          { text: 'Log In', onPress: () => navigation.navigate('Login') },
+          { text: 'Cancel', style: 'cancel' },
+        ]
+      );
+      return;
+    }
+
+    setEmailState('SENDING');
+    try {
+      const res = await sendSignupVerificationEmail(trimmed);
+
+      if (res.success) {
+        setStagingUser(res.stagingUser);
+        setEmailState('SENT');
+        setEmailMessage('✓ Verification email sent! Open the link in your email, then tap Check Status.');
+        Alert.alert(
+          'Verification Email Sent',
+          `A verification link has been sent to ${trimmed}. Please click the link in your inbox, then return here and tap "Check Status".`
+        );
+      } else if (res.code === 'ALREADY_REGISTERED') {
+        setEmailState('ALREADY_REGISTERED');
+        setEmailMessage('✕ This email is already associated with an account.');
+        Alert.alert('Email Already Registered', 'This email already has an account. Please log in.', [
+          { text: 'Log In', onPress: () => navigation.navigate('Login') },
+          { text: 'Dismiss', style: 'cancel' },
+        ]);
+      } else {
+        setEmailState('AVAILABLE');
+        setEmailMessage(`⚠ ${res.message || 'Unable to send verification email.'}`);
+        Alert.alert('Notice', res.message || 'Unable to send verification email. Please check your connection.');
+      }
+    } catch (err) {
+      setEmailState('AVAILABLE');
+      setEmailMessage('⚠ Failed to send verification email.');
+      Alert.alert('Verification Error', err.message || 'Could not send verification email.');
+    }
+  };
+
+  const handleCheckVerificationStatus = async () => {
+    if (!stagingUser) {
+      Alert.alert('Notice', 'Please tap "Verify" to send a verification email first.');
+      return;
+    }
+
+    setIsCheckingStatus(true);
+    try {
+      const res = await checkSignupVerificationStatus(stagingUser);
+
+      if (res.verified) {
+        setIsEmailVerified(true);
+        setVerifiedEmailAddress(email.trim().toLowerCase());
+        setEmailState('VERIFIED');
+        setEmailMessage('✓ Email address verified successfully');
+        Alert.alert('Email Verified', 'Your email address has been confirmed!');
+      } else {
+        Alert.alert(
+          'Not Verified Yet',
+          'We have not detected the verification confirmation yet. Please make sure you clicked the verification link in your inbox, then try again.',
+          [{ text: 'OK' }]
+        );
+      }
+    } catch (err) {
+      Alert.alert('Notice', 'Could not check status: ' + (err.message || 'Please try again.'));
+    } finally {
+      setIsCheckingStatus(false);
+    }
+  };
+
+  // Determine if email verify button should be disabled
+  const isEmailFormatValid = validateEmailFormat(email.trim()).isValid;
+  const isVerifyButtonDisabled =
+    !isEmailFormatValid ||
+    emailState === 'ALREADY_REGISTERED' ||
+    emailState === 'CHECKING' ||
+    emailState === 'SENDING' ||
+    isEmailVerified;
 
   const passwordValidation = validatePassword(password);
   const isPasswordMismatch =
@@ -260,9 +394,29 @@ export default function SignupScreen({ navigation }) {
     const normalizedUsername = cleanUsername.toLowerCase();
     const trimmedEmail = email.trim().toLowerCase();
 
-    // 1. Basic required fields check
-    if (!trimmedName || !cleanUsername || !trimmedEmail || !password || !confirmPassword) {
-      Alert.alert('Incomplete Fields', 'Please complete all required fields.');
+    // 1. Specific required fields check
+    if (!trimmedName) {
+      Alert.alert('Full Name Required', 'Please enter your full name.');
+      return;
+    }
+
+    if (!cleanUsername) {
+      Alert.alert('Username Required', 'Please choose a username handle.');
+      return;
+    }
+
+    if (!trimmedEmail) {
+      Alert.alert('Email Required', 'Please enter your email address.');
+      return;
+    }
+
+    if (!password) {
+      Alert.alert('Password Required', 'Please create a password for your account.');
+      return;
+    }
+
+    if (!confirmPassword) {
+      Alert.alert('Confirm Password Required', 'Please confirm your password.');
       return;
     }
 
@@ -275,7 +429,16 @@ export default function SignupScreen({ navigation }) {
       return;
     }
 
-    // 3. Username format validation
+    // 3. Email verification requirement (Requirement 1.D)
+    if (!isEmailVerified || verifiedEmailAddress !== trimmedEmail) {
+      Alert.alert(
+        'Email Verification Required',
+        'Please verify your email address before creating your account. Tap "Verify" next to the email field, click the confirmation link sent to your inbox, then tap "Check Status".'
+      );
+      return;
+    }
+
+    // 4. Username format validation
     const usernameCheck = validateUsernameFormat(cleanUsername);
     if (!usernameCheck.isValid) {
       setUsernameState('INVALID');
@@ -284,7 +447,7 @@ export default function SignupScreen({ navigation }) {
       return;
     }
 
-    // 4. Stale / Unchecked Username Verification
+    // 5. Stale / Unchecked Username Verification
     if (usernameState !== 'AVAILABLE' || checkedUsername !== normalizedUsername) {
       Alert.alert(
         'Check Username',
@@ -293,13 +456,13 @@ export default function SignupScreen({ navigation }) {
       return;
     }
 
-    // 5. Password checklist verification
+    // 6. Password checklist verification
     if (!passwordValidation.isValid) {
       Alert.alert('Password Requirement', passwordValidation.error || 'Password must meet all checklist requirements.');
       return;
     }
 
-    // 6. Confirm password match
+    // 7. Confirm password match
     if (password !== confirmPassword) {
       Alert.alert('Password Mismatch', 'The passwords you entered do not match.');
       return;
@@ -308,7 +471,7 @@ export default function SignupScreen({ navigation }) {
     setIsLoading(true);
 
     try {
-      // 7. Authoritative final backend check to prevent race condition / client bypass
+      // 8. Authoritative final backend check to prevent race condition / client bypass
       const finalAvailability = await checkUsernameAvailability(cleanUsername);
       if (!finalAvailability.available) {
         setUsernameState('TAKEN');
@@ -319,19 +482,38 @@ export default function SignupScreen({ navigation }) {
         return;
       }
 
-      // 8. Create Firebase Auth credential
+      // 9. Finalize verified staging user into primary session or create credential
       let userCredential;
-      try {
-        userCredential = await createUserWithEmailAndPassword(auth, trimmedEmail, password);
-      } catch (authErr) {
-        handleAuthError(authErr);
-        setIsLoading(false);
-        return;
+      if (stagingUser && isEmailVerified) {
+        try {
+          await finalizeStagingUser(stagingUser, password);
+          userCredential = await signInWithEmailAndPassword(auth, trimmedEmail, password);
+        } catch (finalizeErr) {
+          console.warn('[SignupScreen] Finalize staging error, creating user directly:', finalizeErr.message);
+          try {
+            await cleanupStagingUser(stagingUser);
+          } catch (_) {}
+          try {
+            userCredential = await createUserWithEmailAndPassword(auth, trimmedEmail, password);
+          } catch (authErr) {
+            handleAuthError(authErr);
+            setIsLoading(false);
+            return;
+          }
+        }
+      } else {
+        try {
+          userCredential = await createUserWithEmailAndPassword(auth, trimmedEmail, password);
+        } catch (authErr) {
+          handleAuthError(authErr);
+          setIsLoading(false);
+          return;
+        }
       }
 
       const user = userCredential.user;
 
-      // 9. Atomically reserve username in /usernames and create profile in /users
+      // 10. Atomically reserve username in /usernames and create profile in /users
       try {
         await reserveUsernameAndCreateUser({
           user,
@@ -339,6 +521,7 @@ export default function SignupScreen({ navigation }) {
           username: cleanUsername,
           email: trimmedEmail,
         });
+        await registerEmailReservation(trimmedEmail, user.uid);
       } catch (firestoreErr) {
         if (typeof __DEV__ !== 'undefined' && __DEV__) {
           console.warn('[SignupScreen] Firestore reservation error:', firestoreErr);
@@ -482,52 +665,129 @@ export default function SignupScreen({ navigation }) {
           )}
         </View>
 
-        {/* EMAIL ADDRESS */}
+        {/* EMAIL ADDRESS WITH STAGED VERIFY BUTTON */}
         <View style={styles.inputGroup}>
           <Text style={[styles.label, { color: textSecondary }]}>Email Address *</Text>
-          <TextInput
-            style={[
-              styles.textInput,
-              {
-                backgroundColor: cardBg,
-                color: textColor,
-                borderColor:
-                  emailState === 'VALID'
-                    ? successColor
-                    : emailState === 'INVALID' || emailState === 'ALREADY_REGISTERED'
-                    ? dangerColor
-                    : cardBorder,
-              },
-            ]}
-            placeholder="name@studio.com"
-            placeholderTextColor={textMuted}
-            value={email}
-            onChangeText={handleEmailChange}
-            onBlur={handleEmailBlur}
-            keyboardType="email-address"
-            autoCapitalize="none"
-            autoCorrect={false}
-            accessibilityLabel="Email address input"
-          />
+          <View style={styles.usernameRow}>
+            <TextInput
+              style={[
+                styles.textInput,
+                styles.usernameInput,
+                {
+                  backgroundColor: cardBg,
+                  color: textColor,
+                  borderColor:
+                    isEmailVerified
+                      ? successColor
+                      : emailState === 'AVAILABLE'
+                      ? '#3b82f6'
+                      : emailState === 'INVALID' || emailState === 'ALREADY_REGISTERED'
+                      ? dangerColor
+                      : cardBorder,
+                },
+              ]}
+              placeholder="name@studio.com"
+              placeholderTextColor={textMuted}
+              value={email}
+              onChangeText={handleEmailChange}
+              onBlur={handleEmailBlur}
+              keyboardType="email-address"
+              autoCapitalize="none"
+              autoCorrect={false}
+              accessibilityLabel="Email address input"
+              editable={!isEmailVerified}
+            />
+
+            <TouchableOpacity
+              style={[
+                styles.checkButton,
+                {
+                  backgroundColor:
+                    isEmailVerified
+                      ? '#14532d'
+                      : isVerifyButtonDisabled && emailState !== 'SENT'
+                      ? '#242830'
+                      : primaryColor,
+                  borderColor: isEmailVerified ? successColor : cardBorder,
+                },
+              ]}
+              onPress={
+                isEmailVerified
+                  ? undefined
+                  : emailState === 'SENT'
+                  ? handleCheckVerificationStatus
+                  : handleSendVerificationEmail
+              }
+              disabled={isVerifyButtonDisabled && !isEmailVerified && emailState !== 'SENT'}
+              accessibilityLabel="Verify email address"
+              accessibilityRole="button"
+              activeOpacity={0.8}
+            >
+              {emailState === 'SENDING' || isCheckingStatus ? (
+                <ActivityIndicator size="small" color="#000000" />
+              ) : (
+                <Text
+                  style={[
+                    styles.checkButtonText,
+                    {
+                      color:
+                        isEmailVerified
+                          ? successColor
+                          : isVerifyButtonDisabled && emailState !== 'SENT'
+                          ? textMuted
+                          : '#000000',
+                    },
+                  ]}
+                >
+                  {isEmailVerified
+                    ? '✓ Verified'
+                    : emailState === 'SENT'
+                    ? 'Check Status'
+                    : 'Verify'}
+                </Text>
+              )}
+            </TouchableOpacity>
+          </View>
 
           {/* Email Feedback Status */}
           {emailMessage.length > 0 && (
-            <Text
-              style={[
-                styles.feedbackText,
-                {
-                  color:
-                    emailState === 'VALID'
-                      ? successColor
-                      : emailState === 'INVALID' || emailState === 'ALREADY_REGISTERED'
-                      ? dangerColor
-                      : '#f59e0b',
-                },
-              ]}
-              accessibilityLiveRegion="polite"
+            <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', marginTop: 5 }}>
+              <Text
+                style={[
+                  styles.feedbackText,
+                  {
+                    marginTop: 0,
+                    color:
+                      isEmailVerified || emailState === 'AVAILABLE' || emailState === 'SENT'
+                        ? successColor
+                        : emailState === 'INVALID' || emailState === 'ALREADY_REGISTERED'
+                        ? dangerColor
+                        : '#f59e0b',
+                  },
+                ]}
+                accessibilityLiveRegion="polite"
+              >
+                {emailMessage}
+              </Text>
+              {emailState === 'ALREADY_REGISTERED' && (
+                <TouchableOpacity onPress={() => navigation.navigate('Login')} style={{ marginLeft: 8 }}>
+                  <Text style={{ color: primaryColor, fontWeight: '700', fontSize: 12 }}>
+                    Log in
+                  </Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          )}
+
+          {emailState === 'SENT' && !isEmailVerified && (
+            <TouchableOpacity
+              style={{ marginTop: 6, alignSelf: 'flex-start' }}
+              onPress={handleSendVerificationEmail}
             >
-              {emailMessage}
-            </Text>
+              <Text style={{ color: primaryColor, fontSize: 11, textDecorationLine: 'underline' }}>
+                Resend verification email
+              </Text>
+            </TouchableOpacity>
           )}
         </View>
 
@@ -637,7 +897,13 @@ export default function SignupScreen({ navigation }) {
           title="CREATE ACCOUNT"
           onPress={handleSignup}
           loading={isLoading}
-          style={styles.submitBtn}
+          disabled={!isEmailVerified || usernameState !== 'AVAILABLE' || !fullName.trim() || !passwordValidation.isValid || password !== confirmPassword}
+          style={[
+            styles.submitBtn,
+            (!isEmailVerified || usernameState !== 'AVAILABLE' || !fullName.trim() || !passwordValidation.isValid || password !== confirmPassword) && {
+              opacity: 0.5,
+            },
+          ]}
         />
 
         <CustomButton

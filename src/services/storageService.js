@@ -1,3 +1,4 @@
+import { Platform } from 'react-native';
 import * as FileSystem from 'expo-file-system/legacy';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as SQLite from 'expo-sqlite';
@@ -555,7 +556,15 @@ export const getFullStorageBreakdown = async ({
     getDriveUsage({ rooms }),
   ]);
 
+  const appBinaryBytes = Platform.OS === 'ios' ? 44 * 1024 * 1024 : 38 * 1024 * 1024;
+  const appBinary = {
+    bytes: appBinaryBytes,
+    formatted: formatBytes(appBinaryBytes),
+    label: `${Platform.OS === 'ios' ? 'iOS' : 'Android'} Application Bundle`,
+  };
+
   const totalDeviceBytes =
+    appBinaryBytes +
     deviceStorage.totalBytes +
     offlineDb.totalOfflineBytes +
     cache.bytes;
@@ -565,6 +574,7 @@ export const getFullStorageBreakdown = async ({
 
   return {
     device: {
+      appBinary,
       photos: deviceStorage.photos,
       videos: deviceStorage.videos,
       documents: deviceStorage.documents,

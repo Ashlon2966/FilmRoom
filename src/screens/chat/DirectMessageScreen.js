@@ -32,7 +32,11 @@ import { db } from '../../../firebaseConfig';
 import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
 import BackButton from '../../components/BackButton';
-import { isConnectionAccepted } from '../../services/connectionService';
+import {
+  isConnectionAccepted,
+  getConnectionStatus,
+  sendConnectionRequest,
+} from '../../services/connectionService';
 
 export default function DirectMessageScreen({ route, navigation }) {
   const { peerUser } = route.params || {};
@@ -45,6 +49,8 @@ export default function DirectMessageScreen({ route, navigation }) {
   const [isSending, setIsSending] = useState(false);
   const [isConnected, setIsConnected] = useState(true);
   const [checkingConnection, setCheckingConnection] = useState(true);
+  const [connectionState, setConnectionState] = useState(null);
+  const [isSendingConnReq, setIsSendingConnReq] = useState(false);
   const flatListRef = useRef(null);
 
   const peerId = peerUser?.id || peerUser?.uid;
@@ -80,9 +86,10 @@ export default function DirectMessageScreen({ route, navigation }) {
     let isMounted = true;
     const verifyConnection = async () => {
       if (currentUser?.uid && peerId) {
-        const accepted = await isConnectionAccepted(currentUser.uid, peerId);
+        const statusObj = await getConnectionStatus(currentUser.uid, peerId);
         if (isMounted) {
-          setIsConnected(accepted);
+          setConnectionState(statusObj);
+          setIsConnected(statusObj?.status === 'ACCEPTED');
           setCheckingConnection(false);
         }
       } else {
@@ -94,6 +101,25 @@ export default function DirectMessageScreen({ route, navigation }) {
       isMounted = false;
     };
   }, [currentUser?.uid, peerId]);
+
+  const handleRequestConnection = async () => {
+    if (!currentUser || !peerId || isSendingConnReq) return;
+    setIsSendingConnReq(true);
+    try {
+      await sendConnectionRequest(currentUser, livePeer || peerUser);
+      setConnectionState({
+        exists: true,
+        status: 'PENDING',
+        isInitiator: true,
+        isRecipient: false,
+      });
+      Alert.alert('Connection Dispatched', 'Your connection request was sent.');
+    } catch (e) {
+      Alert.alert('Request Failed', e.message);
+    } finally {
+      setIsSendingConnReq(false);
+    }
+  };
 
   // Stream messages from Firestore
   useEffect(() => {
@@ -324,12 +350,34 @@ export default function DirectMessageScreen({ route, navigation }) {
         </View>
       )}
 
-      {/* Connection Required Banner */}
+      {/* Connection Status Banner */}
       {!isConnected && !checkingConnection && (
-        <View style={[styles.blockedBanner, { backgroundColor: '#2a1a1a', borderColor: '#522b2b', borderWidth: 1 }]}>
-          <Text style={[styles.blockedBannerText, { color: '#f87171' }]}>
-            ⚠️ Connection Required: Messaging is restricted until a mutual contact request is accepted.
-          </Text>
+        <View style={[styles.blockedBanner, { backgroundColor: '#2a2215', borderColor: '#543b14', borderWidth: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }]}>
+          <View style={{ flex: 1, marginRight: 8 }}>
+            <Text style={[styles.blockedBannerText, { color: theme.primary || '#f5a623' }]}>
+              {connectionState?.status === 'PENDING'
+                ? '⏳ Connection Pending: Awaiting response. Direct messaging unlocks once accepted.'
+                : '🔒 Connection Required: Direct messaging is locked until a connection is established.'}
+            </Text>
+          </View>
+          {(!connectionState?.exists || !connectionState?.status) && (
+            <TouchableOpacity
+              style={{
+                backgroundColor: theme.primary || '#f5a623',
+                paddingHorizontal: 12,
+                paddingVertical: 6,
+                borderRadius: 6,
+              }}
+              onPress={handleRequestConnection}
+              disabled={isSendingConnReq}
+            >
+              {isSendingConnReq ? (
+                <ActivityIndicator size="small" color="#000000" />
+              ) : (
+                <Text style={{ color: '#000000', fontSize: 11, fontWeight: '800' }}>+ Connect</Text>
+              )}
+            </TouchableOpacity>
+          )}
         </View>
       )}
 
